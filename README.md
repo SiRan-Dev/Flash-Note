@@ -60,21 +60,6 @@
 - Light / Dark / System theme
 - Cross-platform — Android, iOS, macOS, Windows, Linux, Web
 
-## 1.2.0 Highlights
-
-- Refined AI workspace UI to match the Knowledge Graph visual language
-- Less rigid AI mind maps with better spacing and collision avoidance
-- Desktop interaction pass for graph and mind-map canvases
-- Knowledge Graph actions are consolidated into the bottom tool panel
-- Import / restore now refreshes state immediately and carries more settings/data, including attachments
-- WebDAV sync can include attachments when enabled in settings
-- Theme settings now include dynamic color, AMOLED black, and a full custom palette
-- Weekly / monthly reports and AI insights now use durable local persistence
-
-> Android Debug APK uses package `com.echoran.flashnote.debug` — can coexist with Release.
-
----
-
 ## Getting Started
 
 ### Prerequisites
