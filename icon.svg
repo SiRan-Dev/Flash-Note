@@ -1,0 +1,46 @@
+<svg width="464"
+     height="464"
+     viewBox="24 24 464 464"
+     xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Background -->
+  <rect x="24"
+        y="24"
+        width="464"
+        height="464"
+        rx="112"
+        fill="#A7F3D0"/>
+
+  <!-- Paper -->
+  <rect x="152"
+        y="120"
+        width="208"
+        height="272"
+        rx="40"
+        fill="#FFFFFF"/>
+
+  <!-- Lines -->
+  <rect x="198"
+        y="180"
+        width="100"
+        height="12"
+        rx="6"
+        fill="#D0D7E2"/>
+
+  <rect x="198"
+        y="222"
+        width="132"
+        height="12"
+        rx="6"
+        fill="#D0D7E2"/>
+
+  <!-- Flash -->
+  <path d="M302 144
+           L216 278
+           H268
+           L238 384
+           L328 242
+           H274
+           L302 144Z"
+        fill="#FFD54F"/>
+</svg>
