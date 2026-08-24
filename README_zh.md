@@ -6,8 +6,8 @@
 <p align="center"><strong>AI 驱动的灵感捕捉与管理工具</strong></p>
 
 <p align="center">
-  <a href="https://github.com/EchoRan6319/FlashNote/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/EchoRan6319/FlashNote"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/EchoRan6319/FlashNote?color=blue"></a>
+  <a href="https://github.com/SiRan-Dev/FlashNote/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/SiRan-Dev/FlashNote"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/SiRan-Dev/FlashNote?color=blue"></a>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.41+-02569B?logo=flutter">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.7+-0175C2?logo=dart">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-brightgreen">
@@ -71,7 +71,7 @@
 - 主题设置补齐动态取色、A 屏黑主题和完整自定义调色盘
 - 周报 / 月报 / AI 洞察从短期缓存升级为本地持久化
 
-> Android Debug 版包名 `com.echoran.flashnote.debug`，可与正式版共存。
+> Android Debug 版包名 `com.sirandev.flashnote.debug`，可与正式版共存。
 
 ---
 
@@ -85,7 +85,7 @@
 ### 安装
 
 ```bash
-git clone https://github.com/EchoRan6319/FlashNote.git
+git clone https://github.com/SiRan-Dev/FlashNote.git
 cd FlashNote
 flutter pub get
 ```

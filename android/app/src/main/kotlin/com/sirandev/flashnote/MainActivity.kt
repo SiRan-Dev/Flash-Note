@@ -1,4 +1,4 @@
-package com.echoran.flashnote
+package com.sirandev.flashnote
 
 import android.content.Intent
 import android.net.Uri
@@ -15,7 +15,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "com.echoran.flashnote/updater",
+            "com.sirandev.flashnote/updater",
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getSupportedAbis" -> result.success(Build.SUPPORTED_ABIS.toList())

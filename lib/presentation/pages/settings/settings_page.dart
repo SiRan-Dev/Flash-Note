@@ -524,10 +524,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     _SettingsActionTile(
                       icon: Icons.person_outline,
                       title: l10n.developer,
-                      subtitle: '二词元Token(EchoRan6319)',
+                      subtitle: 'github.com/SiRan-Dev',
                       onTap:
                           () => launchUrl(
-                            Uri.parse('https://github.com/EchoRan6319'),
+                            Uri.parse('https://github.com/SiRan-Dev'),
                           ),
                       showChevron: true,
                     ),

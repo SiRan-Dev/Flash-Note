@@ -9,7 +9,7 @@ plugins {
 }
 
 android {
-    namespace = "com.echoran.flashnote"
+    namespace = "com.sirandev.flashnote"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -24,7 +24,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.echoran.flashnote"
+        applicationId = "com.sirandev.flashnote"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

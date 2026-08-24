@@ -1,8 +1,8 @@
 [Setup]
 AppName=Flash Note
 AppVersion={#MyAppVersion}
-AppPublisher=EchoRan
-AppPublisherURL=https://github.com/EchoRan/FlashNote
+AppPublisher=SiRanDev
+AppPublisherURL=https://github.com/SiRan-Dev/FlashNote
 DefaultDirName={autopf}\FlashNote
 DefaultGroupName=Flash Note
 OutputDir=..\installer_output

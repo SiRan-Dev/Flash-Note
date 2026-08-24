@@ -6,8 +6,8 @@
 <p align="center"><strong>AI-Powered Inspiration Capture & Management</strong></p>
 
 <p align="center">
-  <a href="https://github.com/EchoRan6319/FlashNote/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/EchoRan6319/FlashNote"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/EchoRan6319/FlashNote?color=blue"></a>
+  <a href="https://github.com/SiRan-Dev/FlashNote/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/SiRan-Dev/FlashNote"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/SiRan-Dev/FlashNote?color=blue"></a>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.41+-02569B?logo=flutter">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.7+-0175C2?logo=dart">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-brightgreen">
@@ -70,7 +70,7 @@
 ### Install
 
 ```bash
-git clone https://github.com/EchoRan6319/FlashNote.git
+git clone https://github.com/SiRan-Dev/FlashNote.git
 cd FlashNote
 flutter pub get
 ```

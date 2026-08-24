@@ -51,9 +51,9 @@ class UpdateService {
             ),
           );
 
-  static const _channel = MethodChannel('com.echoran.flashnote/updater');
+  static const _channel = MethodChannel('com.sirandev.flashnote/updater');
   static const _latestReleaseUrl =
-      'https://api.github.com/repos/EchoRan6319/FlashNote/releases/latest';
+      'https://api.github.com/repos/SiRan-Dev/FlashNote/releases/latest';
 
   final Dio _dio;
 
