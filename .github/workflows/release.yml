@@ -67,9 +67,14 @@ jobs:
   # ---------------------------------------------------------------------------
   # iOS (no codesign)
   # ---------------------------------------------------------------------------
+  # NOTE: iOS build runs without code signing (--no-codesign), which cannot
+  # produce a deployable IPA without an Apple Development Team. We mark it
+  # continue-on-error so it never blocks the other platforms' release. The
+  # publish step below tolerates a missing iOS artifact.
   ios:
     name: iOS
     runs-on: macos-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -236,7 +241,11 @@ jobs:
           mkdir -p release
           cp artifacts/android/app-release.apk release/FlashNote-android.apk
           cp artifacts/android/app-release.aab release/FlashNote-android.aab
-          cp artifacts/ios/FlashNote-ios.ipa release/FlashNote-ios.ipa
+          # iOS artifact is optional: the job runs with continue-on-error and
+          # may not produce an IPA when no signing team is configured.
+          if [ -f artifacts/ios/FlashNote-ios.ipa ]; then
+            cp artifacts/ios/FlashNote-ios.ipa release/FlashNote-ios.ipa
+          fi
           cp artifacts/macos/FlashNote-macos.zip release/FlashNote-macos.zip
           cp artifacts/linux/FlashNote-linux.zip release/FlashNote-linux.zip
           cd artifacts/windows
