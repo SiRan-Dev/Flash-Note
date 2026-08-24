@@ -4,11 +4,13 @@ import 'package:flashnote/app/theme/app_theme.dart';
 import 'package:flashnote/l10n/app_localizations.dart';
 import 'package:flashnote/presentation/providers/theme_provider.dart';
 import 'package:flashnote/presentation/providers/webdav_provider.dart';
+import 'package:flashnote/presentation/providers/memory_pressure_provider.dart';
 import 'package:flashnote/presentation/widgets/startup_update_checker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 class FlashNoteApp extends ConsumerStatefulWidget {
   const FlashNoteApp({super.key});
@@ -19,11 +21,35 @@ class FlashNoteApp extends ConsumerStatefulWidget {
 
 class _FlashNoteAppState extends ConsumerState<FlashNoteApp> {
   bool _autoSyncAttempted = false;
+  final _fairMemoryChannel = const MethodChannel(
+    'com.sirandev.flashnote/fairmemory',
+  );
 
   @override
   void initState() {
     super.initState();
     _tryAutoSync();
+    _fairMemoryChannel.setMethodCallHandler(_handleFairMemory);
+  }
+
+  @override
+  void dispose() {
+    _fairMemoryChannel.setMethodCallHandler(null);
+    super.dispose();
+  }
+
+  Future<Object?> _handleFairMemory(MethodCall call) async {
+    if (call.method == 'onTrim') {
+      // Release the most memory-heavy native resource Flutter holds: the image
+      // cache. Live lists rebuild thumbnails on demand.
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+      // Notify providers so screens can flush unsaved drafts to storage.
+      final args = call.arguments;
+      final isKill = args is Map ? (args['isKill'] as bool? ?? false) : false;
+      ref.read(memoryPressureProvider.notifier).notifyTrim(isKill: isKill);
+    }
+    return null;
   }
 
   Future<void> _tryAutoSync() async {

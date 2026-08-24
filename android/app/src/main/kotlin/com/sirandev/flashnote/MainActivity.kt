@@ -5,12 +5,28 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    private val fairMemoryReceiver = FairMemoryReceiver()
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Edge-to-edge: let the Flutter UI draw behind the system status and
+        // navigation bars, and make those bars transparent so content shows
+        // through (immersive full-bleed UI). Equivalent to enableEdgeToEdge().
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        fairMemoryReceiver.initialize(this)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
@@ -35,6 +51,29 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // Forward HyperOS fair-memory (TRIM/KILL) broadcasts to Flutter so it can
+        // clear image caches and persist any in-progress state.
+        val fairMemoryChannel =
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                "com.sirandev.flashnote/fairmemory",
+            )
+        fairMemoryReceiver.onTrim = { notifyType, notifyId, isKill ->
+            fairMemoryChannel.invokeMethod(
+                "onTrim",
+                mapOf(
+                    "notifyType" to notifyType,
+                    "notifyId" to notifyId,
+                    "isKill" to isKill,
+                ),
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        fairMemoryReceiver.dispose(this)
+        super.onDestroy()
     }
 
     private fun canRequestPackageInstallsCompat(): Boolean {

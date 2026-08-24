@@ -49,31 +49,39 @@ class ShellPage extends ConsumerWidget {
           Expanded(child: child),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _getCurrentIndex(context),
-        onDestinationSelected: (index) => _onTap(context, index),
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.home_outlined),
-            selectedIcon: const Icon(Icons.home_rounded),
-            label: l10n.home,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.lightbulb_outline_rounded),
-            selectedIcon: const Icon(Icons.lightbulb_rounded),
-            label: l10n.inspirations,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.folder_outlined),
-            selectedIcon: const Icon(Icons.folder_rounded),
-            label: l10n.projects,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.person_outline_rounded),
-            selectedIcon: const Icon(Icons.person_rounded),
-            label: l10n.settings,
-          ),
-        ],
+      bottomNavigationBar: SafeArea(
+        // Only guard the bottom: the top is irrelevant for a bottom bar, and
+        // use viewPadding so the keyboard (viewInsets) does not shrink it.
+        top: false,
+        bottom: true,
+        child:         NavigationBar(
+          // Reserve space for the system gesture/navigation bar so destinations
+          // are not obscured when the app runs edge-to-edge.
+          selectedIndex: _getCurrentIndex(context),
+          onDestinationSelected: (index) => _onTap(context, index),
+          destinations: [
+            NavigationDestination(
+              icon: const Icon(Icons.home_outlined),
+              selectedIcon: const Icon(Icons.home_rounded),
+              label: l10n.home,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.lightbulb_outline_rounded),
+              selectedIcon: const Icon(Icons.lightbulb_rounded),
+              label: l10n.inspirations,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.folder_outlined),
+              selectedIcon: const Icon(Icons.folder_rounded),
+              label: l10n.projects,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.person_outline_rounded),
+              selectedIcon: const Icon(Icons.person_rounded),
+              label: l10n.settings,
+            ),
+          ],
+        ),
       ),
     );
   }

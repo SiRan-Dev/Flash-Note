@@ -388,41 +388,35 @@ class DataExportService {
     final jsonStr = const JsonEncoder.withIndent('  ').convert(export);
     final bytes = utf8.encode(jsonStr);
 
-    // Pick save location and write file
-    // On Android/iOS, bytes must be passed directly to saveFile()
-    final result = await FilePicker.platform.saveFile(
+    // Pick save location and write file. On Android/iOS the bytes are written
+    // by the platform; saveFile() returns the saved file Uri (or null on cancel).
+    final uri = await FilePicker.saveFile(
       dialogTitle: 'Export FlashNote Data',
-      fileName:
-          'flashnote_export_${DateTime.now().millisecondsSinceEpoch}.json',
-      type: FileType.custom,
-      allowedExtensions: ['json'],
+      fileName: 'flashnote_export_${DateTime.now().millisecondsSinceEpoch}.json',
+      mimeType: 'application/json',
       bytes: bytes,
     );
 
-    return result;
+    return uri?.toString();
   }
 
   /// Import data from a JSON file, overwriting existing data
   Future<ImportResult> importData() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['json'],
-      withData: true,
     );
 
-    if (result == null || result.files.isEmpty) {
+    if (result.isEmpty) {
       return const ImportResult(success: false);
     }
 
-    final pickedFile = result.files.first;
-    final String jsonStr;
-    if (pickedFile.bytes != null) {
-      jsonStr = utf8.decode(pickedFile.bytes!);
-    } else if (pickedFile.path != null) {
-      jsonStr = await File(pickedFile.path!).readAsString();
-    } else {
+    final pickedFile = result.first;
+    final String? path = pickedFile.path;
+    if (path == null) {
       return const ImportResult(success: false);
     }
+    final jsonStr = await File(path).readAsString();
     final data = jsonDecode(jsonStr) as Map<String, dynamic>;
 
     final version = data['version'] as int? ?? 1;

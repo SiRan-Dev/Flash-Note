@@ -100,11 +100,11 @@ class AttachmentSection extends ConsumerWidget {
       BuildContext context, WidgetRef ref) async {
     final l10n = AppLocalizations.of(context);
     try {
-      final result = await FilePicker.platform.pickFiles();
+      final result = await FilePicker.pickFiles();
 
-      if (result == null || result.files.isEmpty) return;
+      if (result.isEmpty) return;
 
-      final file = result.files.first;
+      final file = result.first;
       final fileName = file.name;
       final sourcePath = file.path;
       if (sourcePath == null) return;
