@@ -7,6 +7,7 @@ import 'package:flashnote/presentation/providers/ai_providers.dart';
 import 'package:flashnote/presentation/providers/global_chat_providers.dart';
 import 'package:flashnote/presentation/providers/inspiration_providers.dart';
 import 'package:flashnote/presentation/providers/project_providers.dart';
+import 'package:flashnote/presentation/widgets/app_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';

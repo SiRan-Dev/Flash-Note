@@ -6,7 +6,7 @@ part 'attachment.g.dart';
 enum AttachmentOwnerType { inspiration, project }
 
 @freezed
-class Attachment with _$Attachment {
+abstract class Attachment with _$Attachment {
   const factory Attachment({
     required int id,
     required AttachmentOwnerType ownerType,

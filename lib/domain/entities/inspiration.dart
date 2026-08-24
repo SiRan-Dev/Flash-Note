@@ -5,7 +5,7 @@ part 'inspiration.freezed.dart';
 part 'inspiration.g.dart';
 
 @freezed
-class Inspiration with _$Inspiration {
+abstract class Inspiration with _$Inspiration {
   const factory Inspiration({
     required int id,
     required String content,

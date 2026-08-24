@@ -41,13 +41,13 @@ class _FlashNoteAppState extends ConsumerState<FlashNoteApp> {
           return;
         }
       }
-      ref.read(syncStatusProvider.notifier).state = SyncStatus.syncing;
+      ref.read(syncStatusProvider.notifier).setStatus(SyncStatus.syncing);
       final service = await ref.read(webdavSyncServiceProvider.future);
       await service.mergeSync();
     } catch (_) {
       // Auto-sync failure is silent
     } finally {
-      ref.read(syncStatusProvider.notifier).state = SyncStatus.done;
+      ref.read(syncStatusProvider.notifier).setStatus(SyncStatus.done);
     }
   }
 

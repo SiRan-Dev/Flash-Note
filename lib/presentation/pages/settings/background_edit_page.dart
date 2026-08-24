@@ -37,7 +37,7 @@ class _BackgroundEditPageState extends ConsumerState<BackgroundEditPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(l10n.backgroundSaved)));
-      context.pop();
+      Navigator.of(context).pop();
     }
   }
 

@@ -49,16 +49,20 @@ final projectDetailProvider =
       ProjectDetailNotifier.new,
     );
 
-class ProjectDetailNotifier extends FamilyAsyncNotifier<Project?, int> {
+class ProjectDetailNotifier extends AsyncNotifier<Project?> {
+  ProjectDetailNotifier(this.projectId);
+
+  final int projectId;
+
   @override
-  Future<Project?> build(int projectId) {
+  Future<Project?> build() {
     return ref.read(projectRepositoryProvider).getById(projectId);
   }
 
   Future<void> refresh() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(
-      () => ref.read(projectRepositoryProvider).getById(arg),
+      () => ref.read(projectRepositoryProvider).getById(projectId),
     );
   }
 }
@@ -87,21 +91,25 @@ final taskListProvider =
       TaskListNotifier.new,
     );
 
-class TaskListNotifier extends FamilyAsyncNotifier<List<Task>, int> {
+class TaskListNotifier extends AsyncNotifier<List<Task>> {
+  TaskListNotifier(this.projectId);
+
+  final int projectId;
+
   @override
-  Future<List<Task>> build(int projectId) {
+  Future<List<Task>> build() {
     return ref.read(taskRepositoryProvider).getByProjectId(projectId);
   }
 
   Future<void> refresh() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(
-      () => ref.read(taskRepositoryProvider).getByProjectId(arg),
+      () => ref.read(taskRepositoryProvider).getByProjectId(projectId),
     );
   }
 
   Future<void> addTask(String title) async {
-    await ref.read(taskRepositoryProvider).create(arg, title);
+    await ref.read(taskRepositoryProvider).create(projectId, title);
     ref.invalidate(incompleteTasksProvider);
     // Auto-update project progress
     await _updateProjectProgress();
@@ -125,20 +133,20 @@ class TaskListNotifier extends FamilyAsyncNotifier<List<Task>, int> {
   Future<void> _updateProjectProgress() async {
     final taskRepo = ref.read(taskRepositoryProvider);
     final projectRepo = ref.read(projectRepositoryProvider);
-    final total = await taskRepo.getTotalCount(arg);
+    final total = await taskRepo.getTotalCount(projectId);
     if (total == 0) {
-      await projectRepo.updateProgress(arg, 0);
+      await projectRepo.updateProgress(projectId, 0);
       return;
     }
-    final completed = await taskRepo.getCompletedCount(arg);
+    final completed = await taskRepo.getCompletedCount(projectId);
     final progress = (completed / total * 100).round();
-    await projectRepo.updateProgress(arg, progress);
+    await projectRepo.updateProgress(projectId, progress);
     // Auto-set status to completed if all tasks done
     if (progress == 100) {
-      await projectRepo.updateStatus(arg, 'completed');
+      await projectRepo.updateStatus(projectId, 'completed');
     }
     // Sync project list & detail pages
     ref.invalidate(projectListProvider);
-    ref.invalidate(projectDetailProvider(arg));
+    ref.invalidate(projectDetailProvider(projectId));
   }
 }

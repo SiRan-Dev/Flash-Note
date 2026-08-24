@@ -4,7 +4,7 @@ part 'custom_source.freezed.dart';
 part 'custom_source.g.dart';
 
 @freezed
-class CustomSource with _$CustomSource {
+abstract class CustomSource with _$CustomSource {
   const factory CustomSource({
     required int id,
     required String name,

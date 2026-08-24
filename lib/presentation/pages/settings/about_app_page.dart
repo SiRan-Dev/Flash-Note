@@ -63,7 +63,7 @@ class _AboutAppPageState extends ConsumerState<AboutAppPage> {
     final l10n = AppLocalizations.of(context);
     final languageMode = ref.watch(languageModeProvider);
     final autoCheckUpdates =
-        ref.watch(autoCheckUpdatesProvider).valueOrNull ?? false;
+        ref.watch(autoCheckUpdatesProvider).value ?? false;
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.appName)),

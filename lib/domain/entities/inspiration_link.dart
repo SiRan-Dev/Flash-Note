@@ -6,7 +6,7 @@ part 'inspiration_link.g.dart';
 enum LinkType { similar, causal, complementary, opposite, parentChild }
 
 @freezed
-class InspirationLink with _$InspirationLink {
+abstract class InspirationLink with _$InspirationLink {
   const factory InspirationLink({
     required int id,
     required int sourceId,

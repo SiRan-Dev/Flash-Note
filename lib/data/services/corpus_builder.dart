@@ -36,7 +36,7 @@ class CorpusBuilder {
                     : '';
             final tags =
                 i.tags.isNotEmpty ? ' [标签: ${i.tags.join(", ")}]' : '';
-            final project = i.id != null ? projectMap[i.id] : null;
+            final project = projectMap[i.id];
             String projectStatus = '';
             if (project != null) {
               projectStatus =

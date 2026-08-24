@@ -7,7 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum SyncStatus { idle, syncing, done }
 
-final syncStatusProvider = StateProvider<SyncStatus>((ref) => SyncStatus.idle);
+final syncStatusProvider = NotifierProvider<SyncStatusNotifier, SyncStatus>(
+  SyncStatusNotifier.new,
+);
+
+class SyncStatusNotifier extends Notifier<SyncStatus> {
+  @override
+  SyncStatus build() => SyncStatus.idle;
+
+  void setStatus(SyncStatus status) => state = status;
+}
 
 final webdavStorageProvider = FutureProvider<WebDavStorage>((ref) async {
   final prefs = await SharedPreferences.getInstance();

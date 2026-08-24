@@ -4,7 +4,7 @@ part 'ai_analysis_result.freezed.dart';
 part 'ai_analysis_result.g.dart';
 
 @freezed
-class AiAnalysisResult with _$AiAnalysisResult {
+abstract class AiAnalysisResult with _$AiAnalysisResult {
   const factory AiAnalysisResult({
     required int feasibility,
     required int potential,

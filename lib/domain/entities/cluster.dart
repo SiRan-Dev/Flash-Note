@@ -4,7 +4,7 @@ part 'cluster.freezed.dart';
 part 'cluster.g.dart';
 
 @freezed
-class Cluster with _$Cluster {
+abstract class Cluster with _$Cluster {
   const factory Cluster({
     required int id,
     required String name,
