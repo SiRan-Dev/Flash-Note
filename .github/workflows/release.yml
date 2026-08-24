@@ -56,13 +56,17 @@ jobs:
       - name: Build App Bundle
         run: flutter build appbundle --release
 
+      - name: Stage artifacts
+        run: |
+          mkdir -p android-artifacts
+          cp build/app/outputs/flutter-apk/app-release.apk android-artifacts/app-release.apk
+          cp build/app/outputs/bundle/release/app-release.aab android-artifacts/app-release.aab
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/bundle/release/app-release.aab
+          path: android-artifacts/
 
   # ---------------------------------------------------------------------------
   # iOS (no codesign)
