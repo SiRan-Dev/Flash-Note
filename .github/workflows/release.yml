@@ -13,7 +13,7 @@ jobs:
   # Android (signed APK + AAB)
   # ---------------------------------------------------------------------------
   android:
-    name: Android (APK + AAB)
+    name: Android (APK)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,14 +53,10 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
 
-      - name: Build App Bundle
-        run: flutter build appbundle --release
-
       - name: Stage artifacts
         run: |
           mkdir -p android-artifacts
           cp build/app/outputs/flutter-apk/app-release.apk android-artifacts/app-release.apk
-          cp build/app/outputs/bundle/release/app-release.aab android-artifacts/app-release.aab
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -244,7 +240,6 @@ jobs:
         run: |
           mkdir -p release
           cp artifacts/android/app-release.apk release/FlashNote-android.apk
-          cp artifacts/android/app-release.aab release/FlashNote-android.aab
           # iOS artifact is optional: the job runs with continue-on-error and
           # may not produce an IPA when no signing team is configured.
           if [ -f artifacts/ios/FlashNote-ios.ipa ]; then
