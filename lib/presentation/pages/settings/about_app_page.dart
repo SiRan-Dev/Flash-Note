@@ -175,10 +175,10 @@ class _AboutAppPageState extends ConsumerState<AboutAppPage> {
                 _AboutActionTile(
                   icon: Icons.code_rounded,
                   title: l10n.aboutOpenSource,
-                  subtitle: 'github.com/SiRan-Dev/FlashNote',
+                  subtitle: 'github.com/SiRan-Dev/Flash-Note',
                   onTap:
                       () => launchUrl(
-                        Uri.parse('https://github.com/SiRan-Dev/FlashNote'),
+                        Uri.parse('https://github.com/SiRan-Dev/Flash-Note'),
                         mode: LaunchMode.externalApplication,
                       ),
                   trailing: const Icon(Icons.open_in_new_rounded, size: 20),
@@ -191,7 +191,7 @@ class _AboutAppPageState extends ConsumerState<AboutAppPage> {
                   onTap:
                       () => launchUrl(
                         Uri.parse(
-                          'https://github.com/SiRan-Dev/FlashNote/releases',
+                          'https://github.com/SiRan-Dev/Flash-Note/releases',
                         ),
                         mode: LaunchMode.externalApplication,
                       ),

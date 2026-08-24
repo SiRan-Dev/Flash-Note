@@ -550,10 +550,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     _SettingsActionTile(
                       icon: Icons.person_outline,
                       title: l10n.developer,
-                      subtitle: 'github.com/SiRan-Dev',
+                      subtitle: 'github.com/SiRan-Dev/Flash-Note',
                       onTap:
                           () => launchUrl(
-                            Uri.parse('https://github.com/SiRan-Dev'),
+                            Uri.parse('https://github.com/SiRan-Dev/Flash-Note'),
                           ),
                       showChevron: true,
                     ),

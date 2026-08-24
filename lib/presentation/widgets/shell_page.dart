@@ -42,7 +42,6 @@ class ShellPage extends ConsumerWidget {
     final navBarColor = Theme.of(context).colorScheme.surfaceContainer;
 
     return Scaffold(
-      extendBody: true,
       body: Column(
         children: [
           AnimatedContainer(
@@ -56,17 +55,14 @@ class ShellPage extends ConsumerWidget {
           Expanded(child: child),
         ],
       ),
-      bottomNavigationBar: Container(
+      bottomNavigationBar: ColoredBox(
         color: navBarColor,
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewPadding.bottom,
-        ),
-        child: NavigationBar(
-          // Reserve space for the system gesture/navigation bar so destinations
-          // are not obscured when the app runs edge-to-edge.
-          selectedIndex: _getCurrentIndex(context),
-          onDestinationSelected: (index) => _onTap(context, index),
-          destinations: [
+        child: SafeArea(
+          top: false,
+          child: NavigationBar(
+            selectedIndex: _getCurrentIndex(context),
+            onDestinationSelected: (index) => _onTap(context, index),
+            destinations: [
             NavigationDestination(
               icon: const Icon(Icons.home_outlined),
               selectedIcon: const Icon(Icons.home_rounded),
@@ -88,6 +84,7 @@ class ShellPage extends ConsumerWidget {
               label: l10n.settings,
             ),
           ],
+          ),
         ),
       ),
     );
