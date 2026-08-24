@@ -1,4 +1,5 @@
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:material_ui/material_ui.dart' as mui;
 import 'package:flashnote/app/router.dart';
 import 'package:flashnote/app/theme/app_theme.dart';
 import 'package:flashnote/l10n/app_localizations.dart';
@@ -88,8 +89,10 @@ class _FlashNoteAppState extends ConsumerState<FlashNoteApp> {
             final amoled = ref.watch(amoledBlackProvider);
             final themeSeedColor = ref.watch(themeSeedColorProvider);
             final useDynamicColor = ref.watch(dynamicColorProvider);
-            final lightScheme = useDynamicColor ? lightDynamic : null;
-            final darkScheme = useDynamicColor ? darkDynamic : null;
+            // dynamic_color 2.x provides a material_ui.ColorScheme, which is a
+            // distinct type from Flutter's ColorScheme, so convert it here.
+            final lightScheme = useDynamicColor ? _toFlutterColorScheme(lightDynamic) : null;
+            final darkScheme = useDynamicColor ? _toFlutterColorScheme(darkDynamic) : null;
             final seedColor =
                 useDynamicColor && lightDynamic != null && darkDynamic != null
                     ? null
@@ -144,4 +147,60 @@ class _FlashNoteScrollBehavior extends MaterialScrollBehavior {
     PointerDeviceKind.trackpad,
     PointerDeviceKind.unknown,
   };
+}
+
+/// Converts a [mui.ColorScheme] (provided by dynamic_color 2.x) into Flutter's
+/// [ColorScheme]. Both expose identical Material 3 roles, so this is a 1:1
+/// field mapping.
+ColorScheme? _toFlutterColorScheme(mui.ColorScheme? scheme) {
+  if (scheme == null) return null;
+  return ColorScheme(
+    brightness: scheme.brightness,
+    primary: scheme.primary,
+    onPrimary: scheme.onPrimary,
+    primaryContainer: scheme.primaryContainer,
+    onPrimaryContainer: scheme.onPrimaryContainer,
+    primaryFixed: scheme.primaryFixed,
+    primaryFixedDim: scheme.primaryFixedDim,
+    onPrimaryFixed: scheme.onPrimaryFixed,
+    onPrimaryFixedVariant: scheme.onPrimaryFixedVariant,
+    secondary: scheme.secondary,
+    onSecondary: scheme.onSecondary,
+    secondaryContainer: scheme.secondaryContainer,
+    onSecondaryContainer: scheme.onSecondaryContainer,
+    secondaryFixed: scheme.secondaryFixed,
+    secondaryFixedDim: scheme.secondaryFixedDim,
+    onSecondaryFixed: scheme.onSecondaryFixed,
+    onSecondaryFixedVariant: scheme.onSecondaryFixedVariant,
+    tertiary: scheme.tertiary,
+    onTertiary: scheme.onTertiary,
+    tertiaryContainer: scheme.tertiaryContainer,
+    onTertiaryContainer: scheme.onTertiaryContainer,
+    tertiaryFixed: scheme.tertiaryFixed,
+    tertiaryFixedDim: scheme.tertiaryFixedDim,
+    onTertiaryFixed: scheme.onTertiaryFixed,
+    onTertiaryFixedVariant: scheme.onTertiaryFixedVariant,
+    error: scheme.error,
+    onError: scheme.onError,
+    errorContainer: scheme.errorContainer,
+    onErrorContainer: scheme.onErrorContainer,
+    surface: scheme.surface,
+    onSurface: scheme.onSurface,
+    surfaceDim: scheme.surfaceDim,
+    surfaceBright: scheme.surfaceBright,
+    surfaceContainerLowest: scheme.surfaceContainerLowest,
+    surfaceContainerLow: scheme.surfaceContainerLow,
+    surfaceContainer: scheme.surfaceContainer,
+    surfaceContainerHigh: scheme.surfaceContainerHigh,
+    surfaceContainerHighest: scheme.surfaceContainerHighest,
+    onSurfaceVariant: scheme.onSurfaceVariant,
+    outline: scheme.outline,
+    outlineVariant: scheme.outlineVariant,
+    shadow: scheme.shadow,
+    scrim: scheme.scrim,
+    inverseSurface: scheme.inverseSurface,
+    onInverseSurface: scheme.onInverseSurface,
+    inversePrimary: scheme.inversePrimary,
+    surfaceTint: scheme.surfaceTint,
+  );
 }
