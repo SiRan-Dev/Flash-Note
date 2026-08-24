@@ -12,10 +12,12 @@ import 'package:flashnote/presentation/pages/project/create_project_page.dart';
 import 'package:flashnote/presentation/pages/project/project_detail_page.dart';
 import 'package:flashnote/presentation/pages/project/project_list_page.dart';
 import 'package:flashnote/presentation/pages/settings/about_app_page.dart';
+import 'package:flashnote/presentation/pages/settings/background_edit_page.dart';
 import 'package:flashnote/presentation/pages/settings/settings_page.dart';
 import 'package:flashnote/presentation/pages/settings/source_management_page.dart';
 import 'package:flashnote/presentation/pages/settings/theme_color_page.dart';
 import 'package:flashnote/presentation/pages/settings/webdav_settings_page.dart';
+import 'package:flashnote/presentation/pages/global_chat/global_chat_page.dart';
 import 'package:flashnote/presentation/widgets/shell_page.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -124,6 +126,16 @@ final router = GoRouter(
       path: '/settings/about',
       parentNavigatorKey: rootNavigatorKey,
       builder: (context, state) => const AboutAppPage(),
+    ),
+    GoRoute(
+      path: '/settings/background',
+      parentNavigatorKey: rootNavigatorKey,
+      builder: (context, state) => const BackgroundEditPage(),
+    ),
+    GoRoute(
+      path: '/global-chat',
+      parentNavigatorKey: rootNavigatorKey,
+      builder: (context, state) => const GlobalChatPage(),
     ),
     GoRoute(
       path: '/knowledge-graph',

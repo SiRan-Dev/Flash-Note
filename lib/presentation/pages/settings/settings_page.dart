@@ -514,6 +514,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 child: Column(
                   children: [
                     _SettingsActionTile(
+                      icon: Icons.badge_outlined,
+                      title: l10n.userBackground,
+                      subtitle: l10n.userBackgroundDesc,
+                      onTap: () => context.push('/settings/background'),
+                      showChevron: true,
+                    ),
+                    _SettingsDivider(),
+                    _SettingsActionTile(
                       icon: Icons.info_outline,
                       title: l10n.appName,
                       subtitle: '${l10n.version}: v$_appVersion',

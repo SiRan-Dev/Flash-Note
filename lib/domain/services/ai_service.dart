@@ -41,6 +41,17 @@ abstract class AiService {
     String apiKey,
   );
 
+  /// 全局 AI 对话（流式）
+  /// [userMessage] 当前用户消息；[history] 历史（末条为当前消息，前序为历史）；
+  /// [systemContext] 由调用方组装的用户背景 + 灵感/项目汇总。
+  Stream<String> globalChat(
+    String userMessage,
+    List<ChatMessage> history,
+    String systemContext,
+    AiPreset preset,
+    String apiKey,
+  );
+
   /// 分析灵感之间的关联关系
   Future<List<AiDiscoveredLink>> findRelationships(
     int targetId,

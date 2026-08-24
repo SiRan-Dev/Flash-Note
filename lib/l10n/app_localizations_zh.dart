@@ -821,4 +821,34 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get aboutCheckFailed => '检查更新失败';
+
+  @override
+  String get userBackground => '个人背景';
+
+  @override
+  String get userBackgroundDesc => '向 AI 说明你的职业与主要工作，AI 才能结合背景更好地协助你。';
+
+  @override
+  String get editBackground => '编辑背景';
+
+  @override
+  String get backgroundHint => '例如：我是一名产品经理，专注 AI 工具，常思考用户增长与新手引导。';
+
+  @override
+  String get backgroundSaved => '背景已保存';
+
+  @override
+  String get globalChat => 'AI 助手';
+
+  @override
+  String get globalChatDesc => '与了解你的背景、灵感与项目的助手对话。';
+
+  @override
+  String get openGlobalChat => '打开 AI 助手';
+
+  @override
+  String get clearGlobalChat => '清空对话';
+
+  @override
+  String get clearGlobalChatConfirm => '确定清空全部对话历史吗？';
 }

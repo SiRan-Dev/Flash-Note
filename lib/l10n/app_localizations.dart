@@ -1723,6 +1723,66 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'检查更新失败'**
   String get aboutCheckFailed;
+
+  /// No description provided for @userBackground.
+  ///
+  /// In zh, this message translates to:
+  /// **'个人背景'**
+  String get userBackground;
+
+  /// No description provided for @userBackgroundDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'向 AI 说明你的职业与主要工作，AI 才能结合背景更好地协助你。'**
+  String get userBackgroundDesc;
+
+  /// No description provided for @editBackground.
+  ///
+  /// In zh, this message translates to:
+  /// **'编辑背景'**
+  String get editBackground;
+
+  /// No description provided for @backgroundHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'例如：我是一名产品经理，专注 AI 工具，常思考用户增长与新手引导。'**
+  String get backgroundHint;
+
+  /// No description provided for @backgroundSaved.
+  ///
+  /// In zh, this message translates to:
+  /// **'背景已保存'**
+  String get backgroundSaved;
+
+  /// No description provided for @globalChat.
+  ///
+  /// In zh, this message translates to:
+  /// **'AI 助手'**
+  String get globalChat;
+
+  /// No description provided for @globalChatDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'与了解你的背景、灵感与项目的助手对话。'**
+  String get globalChatDesc;
+
+  /// No description provided for @openGlobalChat.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开 AI 助手'**
+  String get openGlobalChat;
+
+  /// No description provided for @clearGlobalChat.
+  ///
+  /// In zh, this message translates to:
+  /// **'清空对话'**
+  String get clearGlobalChat;
+
+  /// No description provided for @clearGlobalChatConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定清空全部对话历史吗？'**
+  String get clearGlobalChatConfirm;
 }
 
 class _AppLocalizationsDelegate

@@ -5,6 +5,7 @@ import 'package:flashnote/data/datasources/local/tables/chat_message_table.dart'
 import 'package:flashnote/data/datasources/local/tables/cluster_table.dart';
 import 'package:flashnote/data/datasources/local/tables/custom_source_table.dart';
 import 'package:flashnote/data/datasources/local/tables/deleted_record_table.dart';
+import 'package:flashnote/data/datasources/local/tables/global_chat_message_table.dart';
 import 'package:flashnote/data/datasources/local/tables/inspiration_link_table.dart';
 import 'package:flashnote/data/datasources/local/tables/inspiration_table.dart';
 import 'package:flashnote/data/datasources/local/tables/project_table.dart';
@@ -25,6 +26,7 @@ part 'app_database.g.dart';
     Clusters,
     DeletedRecords,
     Reports,
+    GlobalChatMessages,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -34,7 +36,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -75,6 +77,9 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 10) {
         await m.addColumn(inspirationLinks, inspirationLinks.relationLabel);
+      }
+      if (from < 11) {
+        await m.createTable(globalChatMessages);
       }
     },
   );
@@ -312,6 +317,20 @@ class AppDatabase extends _$AppDatabase {
   Future<int> deleteChatMessagesByInspirationId(int inspirationId) =>
       (delete(chatMessages)
         ..where((t) => t.inspirationId.equals(inspirationId))).go();
+
+  // === GlobalChatMessages ===
+
+  Future<List<GlobalChatMessage>> getAllGlobalChatMessages() =>
+      (select(globalChatMessages)
+            ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          .get();
+
+  Future<int> insertGlobalChatMessage(
+    GlobalChatMessagesCompanion entry,
+  ) =>
+      into(globalChatMessages).insert(entry);
+
+  Future<int> deleteAllGlobalChatMessages() => delete(globalChatMessages).go();
 
   // === Attachments ===
 

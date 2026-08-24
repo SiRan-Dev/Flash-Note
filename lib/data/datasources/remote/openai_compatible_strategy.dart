@@ -164,6 +164,44 @@ class OpenAiCompatibleStrategy {
     yield* _parseOpenAiSse(body.stream);
   }
 
+  Stream<String> globalChat(
+    String userMessage,
+    List<ChatMessage> history,
+    String systemContext,
+    AiPreset preset,
+    String apiKey,
+  ) async* {
+    final lastMessage = history.last.content;
+    final priorHistory = history.sublist(0, history.length - 1);
+
+    final messages = <Map<String, String>>[
+      {'role': 'system', 'content': systemContext},
+      for (final msg in priorHistory)
+        {
+          'role': msg.role == ChatRole.user ? 'user' : 'assistant',
+          'content': msg.content,
+        },
+      {'role': 'user', 'content': lastMessage},
+    ];
+
+    final response = await _dio.post(
+      '${preset.baseUrl}/chat/completions',
+      options: Options(
+        headers: _headers(apiKey),
+        responseType: ResponseType.stream,
+      ),
+      data: {
+        'model': preset.model,
+        'messages': messages,
+        'temperature': 0.7,
+        'stream': true,
+      },
+    );
+
+    final body = response.data as ResponseBody;
+    yield* _parseOpenAiSse(body.stream);
+  }
+
   Stream<String> _parseOpenAiSse(Stream<Uint8List> byteStream) async* {
     final lines = byteStream
         .transform(

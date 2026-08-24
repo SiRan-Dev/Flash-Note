@@ -270,5 +270,15 @@
   "aboutReleases": "Releases",
   "aboutReleasesDesc": "View release notes and past APKs.",
   "aboutAlreadyLatest": "You are up to date.",
-  "aboutCheckFailed": "Update check failed"
+  "aboutCheckFailed": "Update check failed",
+  "userBackground": "Personal Background",
+  "userBackgroundDesc": "Tell the AI about your role and what you mainly do, so it can assist you with context.",
+  "editBackground": "Edit Background",
+  "backgroundHint": "e.g. I'm a product manager focused on AI tools; I usually think about user growth and onboarding.",
+  "backgroundSaved": "Background saved",
+  "globalChat": "AI Assistant",
+  "globalChatDesc": "Chat with an assistant that knows your background, ideas, and projects.",
+  "openGlobalChat": "Open AI Assistant",
+  "clearGlobalChat": "Clear conversation",
+  "clearGlobalChatConfirm": "Clear the entire conversation history?"
 }

@@ -51,6 +51,32 @@ class AiServiceImpl implements AiService {
   }
 
   @override
+  Stream<String> globalChat(
+    String userMessage,
+    List<ChatMessage> history,
+    String systemContext,
+    AiPreset preset,
+    String apiKey,
+  ) {
+    if (preset.isClaude) {
+      return _claudeStrategy.globalChat(
+        userMessage,
+        history,
+        systemContext,
+        preset,
+        apiKey,
+      );
+    }
+    return _openAiStrategy.globalChat(
+      userMessage,
+      history,
+      systemContext,
+      preset,
+      apiKey,
+    );
+  }
+
+  @override
   Future<List<AiDiscoveredLink>> findRelationships(
     int targetId,
     String targetContent,

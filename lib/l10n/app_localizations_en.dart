@@ -838,4 +838,37 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get aboutCheckFailed => 'Update check failed';
+
+  @override
+  String get userBackground => 'Personal Background';
+
+  @override
+  String get userBackgroundDesc =>
+      'Tell the AI about your role and what you mainly do, so it can assist you with context.';
+
+  @override
+  String get editBackground => 'Edit Background';
+
+  @override
+  String get backgroundHint =>
+      'e.g. I\'m a product manager focused on AI tools; I usually think about user growth and onboarding.';
+
+  @override
+  String get backgroundSaved => 'Background saved';
+
+  @override
+  String get globalChat => 'AI Assistant';
+
+  @override
+  String get globalChatDesc =>
+      'Chat with an assistant that knows your background, ideas, and projects.';
+
+  @override
+  String get openGlobalChat => 'Open AI Assistant';
+
+  @override
+  String get clearGlobalChat => 'Clear conversation';
+
+  @override
+  String get clearGlobalChatConfirm => 'Clear the entire conversation history?';
 }

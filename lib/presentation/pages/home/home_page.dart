@@ -267,6 +267,12 @@ class _QuickActions extends StatelessWidget {
         icon: Icons.lightbulb_outline,
         route: '/report/insights',
       ),
+      _QuickActionData(
+        title: l10n.globalChat,
+        subtitle: l10n.globalChatDesc,
+        icon: Icons.psychology_alt_outlined,
+        route: '/global-chat',
+      ),
     ];
 
     return LayoutBuilder(

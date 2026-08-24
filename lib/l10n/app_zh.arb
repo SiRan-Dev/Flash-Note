@@ -270,5 +270,15 @@
   "aboutReleases": "发布记录",
   "aboutReleasesDesc": "查看版本说明与历史安装包。",
   "aboutAlreadyLatest": "当前已是最新版本。",
-  "aboutCheckFailed": "检查更新失败"
+  "aboutCheckFailed": "检查更新失败",
+  "userBackground": "个人背景",
+  "userBackgroundDesc": "向 AI 说明你的职业与主要工作，AI 才能结合背景更好地协助你。",
+  "editBackground": "编辑背景",
+  "backgroundHint": "例如：我是一名产品经理，专注 AI 工具，常思考用户增长与新手引导。",
+  "backgroundSaved": "背景已保存",
+  "globalChat": "AI 助手",
+  "globalChatDesc": "与了解你的背景、灵感与项目的助手对话。",
+  "openGlobalChat": "打开 AI 助手",
+  "clearGlobalChat": "清空对话",
+  "clearGlobalChatConfirm": "确定清空全部对话历史吗？"
 }
