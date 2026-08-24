@@ -35,7 +35,14 @@ class ShellPage extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final syncStatus = ref.watch(syncStatusProvider);
 
+    // Surface container is the color NavigationBar uses for its background.
+    // We paint a matching Container that extends into the system gesture area
+    // (bottom view padding) so there is no white strip below the bar when the
+    // app draws edge-to-edge with a transparent window background.
+    final navBarColor = Theme.of(context).colorScheme.surfaceContainer;
+
     return Scaffold(
+      extendBody: true,
       body: Column(
         children: [
           AnimatedContainer(
@@ -49,12 +56,12 @@ class ShellPage extends ConsumerWidget {
           Expanded(child: child),
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        // Only guard the bottom: the top is irrelevant for a bottom bar, and
-        // use viewPadding so the keyboard (viewInsets) does not shrink it.
-        top: false,
-        bottom: true,
-        child:         NavigationBar(
+      bottomNavigationBar: Container(
+        color: navBarColor,
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewPadding.bottom,
+        ),
+        child: NavigationBar(
           // Reserve space for the system gesture/navigation bar so destinations
           // are not obscured when the app runs edge-to-edge.
           selectedIndex: _getCurrentIndex(context),
