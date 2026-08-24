@@ -280,5 +280,7 @@
   "globalChatDesc": "Chat with an assistant that knows your background, ideas, and projects.",
   "openGlobalChat": "Open AI Assistant",
   "clearGlobalChat": "Clear conversation",
-  "clearGlobalChatConfirm": "Clear the entire conversation history?"
+  "clearGlobalChatConfirm": "Clear the entire conversation history?",
+  "predictiveBack": "Predictive back gesture",
+  "predictiveBackDesc": "Preview the destination while swiping from the left edge. Requires Android 13 or later."
 }

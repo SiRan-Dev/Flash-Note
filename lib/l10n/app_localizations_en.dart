@@ -871,4 +871,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get clearGlobalChatConfirm => 'Clear the entire conversation history?';
+
+  @override
+  String get predictiveBack => 'Predictive back gesture';
+
+  @override
+  String get predictiveBackDesc =>
+      'Preview the destination while swiping from the left edge. Requires Android 13 or later.';
 }

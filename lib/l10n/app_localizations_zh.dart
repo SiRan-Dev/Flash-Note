@@ -851,4 +851,10 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get clearGlobalChatConfirm => '确定清空全部对话历史吗？';
+
+  @override
+  String get predictiveBack => '预测式返回手势';
+
+  @override
+  String get predictiveBackDesc => '从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上';
 }

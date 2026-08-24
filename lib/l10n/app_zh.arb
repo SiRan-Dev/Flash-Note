@@ -280,5 +280,7 @@
   "globalChatDesc": "与了解你的背景、灵感与项目的助手对话。",
   "openGlobalChat": "打开 AI 助手",
   "clearGlobalChat": "清空对话",
-  "clearGlobalChatConfirm": "确定清空全部对话历史吗？"
+  "clearGlobalChatConfirm": "确定清空全部对话历史吗？",
+  "predictiveBack": "预测式返回手势",
+  "predictiveBackDesc": "从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上"
 }

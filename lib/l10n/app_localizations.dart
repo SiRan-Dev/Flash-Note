@@ -1783,6 +1783,18 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'确定清空全部对话历史吗？'**
   String get clearGlobalChatConfirm;
+
+  /// No description provided for @predictiveBack.
+  ///
+  /// In zh, this message translates to:
+  /// **'预测式返回手势'**
+  String get predictiveBack;
+
+  /// No description provided for @predictiveBackDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上'**
+  String get predictiveBackDesc;
 }
 
 class _AppLocalizationsDelegate

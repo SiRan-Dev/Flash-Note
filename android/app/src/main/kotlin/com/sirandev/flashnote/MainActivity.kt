@@ -1,12 +1,12 @@
 package com.sirandev.flashnote
 
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -19,12 +19,40 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         // Edge-to-edge: let the Flutter UI draw behind the system status and
         // navigation bars, and make those bars transparent so content shows
-        // through (immersive full-bleed UI). Equivalent to enableEdgeToEdge().
+        // through (immersive full-bleed UI). The status/nav bar icon brightness
+        // is then controlled by Flutter (AppBar / SystemUiOverlayStyle).
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.isAppearanceLightStatusBars = false
-        controller.isAppearanceLightNavigationBars = false
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.navigationBarDividerColor = Color.TRANSPARENT
+        }
+        applyPredictiveBack()
         fairMemoryReceiver.initialize(this)
+    }
+
+    /** Applies the predictive-back setting read from SharedPreferences. */
+    private fun applyPredictiveBack() {
+        val enabled =
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .getBoolean("flutter.predictive_back_enabled", true)
+        setPredictiveBackEnabled(enabled)
+    }
+
+    /** Enables/disables the Android predictive back gesture at runtime.
+     *  ComponentActivity.setEnableOnBackInvokedCallback is available on
+     *  androidx.activity 1.8.0+ (Android 13+). Falls back silently otherwise. */
+    private fun setPredictiveBackEnabled(enabled: Boolean) {
+        try {
+            val method =
+                javaClass.superclass?.superclass?.getMethod(
+                    "setEnableOnBackInvokedCallback",
+                    Boolean::class.javaPrimitiveType,
+                )
+            method?.invoke(this, enabled)
+        } catch (_: ReflectiveOperationException) {
+            // Runtime toggle not available on this androidx.activity version.
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -68,6 +96,21 @@ class MainActivity : FlutterActivity() {
                     "isKill" to isKill,
                 ),
             )
+        }
+
+        // Apply predictive-back setting changes from the Flutter settings UI.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.sirandev.flashnote/predictiveback",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: true
+                    setPredictiveBackEnabled(enabled)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
         }
     }
 

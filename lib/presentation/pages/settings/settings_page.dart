@@ -4,6 +4,7 @@ import 'package:flashnote/presentation/providers/ai_providers.dart';
 import 'package:flashnote/presentation/providers/data_export_provider.dart';
 import 'package:flashnote/presentation/providers/inspiration_providers.dart';
 import 'package:flashnote/presentation/providers/project_providers.dart';
+import 'package:flashnote/presentation/providers/predictive_back_provider.dart';
 import 'package:flashnote/presentation/providers/review_providers.dart';
 import 'package:flashnote/presentation/providers/source_providers.dart';
 import 'package:flashnote/presentation/providers/theme_provider.dart';
@@ -14,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -214,6 +216,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final copy = _SettingsCopy.of(context);
     final themeMode = ref.watch(themeModeProvider);
     final amoledBlack = ref.watch(amoledBlackProvider);
+    final predictiveBack = ref.watch(predictiveBackProvider);
     final useDynamicColor = ref.watch(dynamicColorProvider);
     final themeSeedColor = ref.watch(themeSeedColorProvider);
 
@@ -306,6 +309,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           (value) => ref
                               .read(amoledBlackProvider.notifier)
                               .toggle(value),
+                    ),
+                    const SizedBox(height: 10),
+                    _SettingsSwitchRow(
+                      icon: Icons.swipe_outlined,
+                      title: l10n.predictiveBack,
+                      subtitle: l10n.predictiveBackDesc,
+                      value: predictiveBack,
+                      onChanged: (value) {
+                        ref
+                            .read(predictiveBackProvider.notifier)
+                            .toggle(value);
+                        const MethodChannel(
+                          'com.sirandev.flashnote/predictiveback',
+                        ).invokeMethod('setEnabled', {'enabled': value});
+                      },
                     ),
                   ],
                 ),

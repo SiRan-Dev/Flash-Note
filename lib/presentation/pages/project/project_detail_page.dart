@@ -37,11 +37,9 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     final projectAsync = ref.watch(projectDetailProvider(widget.projectId));
 
     return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        context.pop();
-      },
+      // Allow the default (predictive) back gesture to work. There is no
+      // unsaved-state guard here, so we do not intercept the gesture.
+      canPop: true,
       child: projectAsync.when(
         loading:
             () => const Scaffold(
