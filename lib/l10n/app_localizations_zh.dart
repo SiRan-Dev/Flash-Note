@@ -387,6 +387,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get importFailed => '导入失败';
 
   @override
+  String get credentialsNotIncluded =>
+      '导入/同步的数据不包含 API Key 和 WebDAV 密码，请在本机重新填写。';
+
+  @override
   String get importConfirm => '导入将覆盖现有数据，确定继续吗？';
 
   @override

@@ -180,14 +180,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         await _loadSettings();
       }
       if (mounted) {
+        final message =
+            result.success
+                ? result.aiSettingsChanged
+                    ? l10n.importSuccessAiUpdated
+                    : l10n.importSuccess
+                : l10n.importFailed;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              result.success
-                  ? result.aiSettingsChanged
-                      ? l10n.importSuccessAiUpdated
-                      : l10n.importSuccess
-                  : l10n.importFailed,
+              result.success && result.credentialsRequired
+                  ? '$message\n${l10n.credentialsNotIncluded}'
+                  : message,
             ),
           ),
         );

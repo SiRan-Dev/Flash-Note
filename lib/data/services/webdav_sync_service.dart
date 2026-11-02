@@ -6,6 +6,7 @@ import 'package:flashnote/data/datasources/local/ai_settings_storage.dart';
 import 'package:flashnote/data/datasources/local/app_database.dart';
 import 'package:flashnote/data/datasources/local/webdav_storage.dart';
 import 'package:flashnote/data/datasources/remote/webdav_client.dart';
+import 'package:flashnote/data/services/snapshot_validator.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -15,16 +16,21 @@ class SyncResult {
     this.message = '同步成功',
     this.count,
     this.aiSettingsChanged = false,
+    this.credentialsRequired = false,
   }) : isSuccess = true;
   const SyncResult.failure(this.message)
     : isSuccess = false,
       count = null,
-      aiSettingsChanged = false;
+      aiSettingsChanged = false,
+      credentialsRequired = false;
 
   final bool isSuccess;
   final String message;
   final int? count;
   final bool aiSettingsChanged;
+
+  /// 恢复的数据不含 API Key，需要用户在本机重新填写。
+  final bool credentialsRequired;
 }
 
 class WebDavSyncService {
@@ -43,6 +49,15 @@ class WebDavSyncService {
     Map<String, dynamic> local,
     Map<String, dynamic> remote,
   ) => _mergeData(local, remote);
+
+  @visibleForTesting
+  static Map<String, dynamic> stripCredentialsForTesting(
+    Map<String, dynamic> snapshot,
+  ) => _stripCredentials(snapshot);
+
+  @visibleForTesting
+  Future<bool> importSnapshotForTesting(Map<String, dynamic> data) =>
+      _importFromJson(data);
 
   Future<WebDavClient> _getClient() async {
     final user = await webdavStorage.username;
@@ -107,12 +122,12 @@ class WebDavSyncService {
     return restoredPath;
   }
 
-  Future<void> _deleteAttachmentFile(String filePath) async {
-    if (filePath.isEmpty) return;
-    final file = File(filePath);
-    if (await file.exists()) {
-      await file.delete();
-    }
+  /// Whether the local device is missing the API key for the active interface.
+  /// Exported/synced snapshots never contain credentials, so a restore onto a
+  /// fresh device must ask the user to fill them in again.
+  Future<bool> _needsAiKey() async {
+    final key = await aiStorage.getApiKey(aiStorage.selectedPresetId);
+    return key == null || key.isEmpty;
   }
 
   /// Export local data to JSON map (same format as DataExportService)
@@ -271,236 +286,245 @@ class WebDavSyncService {
     };
   }
 
-  /// Import data from JSON map into local DB
+  /// Import data from JSON map into local DB.
+  ///
+  /// The whole snapshot is validated before anything is touched, all database
+  /// writes run in a single transaction, and local attachment files are never
+  /// deleted. A parse/validation failure therefore leaves local data intact.
   Future<bool> _importFromJson(Map<String, dynamic> data) async {
+    validateSnapshot(data);
     final version = data['version'] as int? ?? 1;
-    if (version < 1 || version > 5) {
-      throw Exception('不支持的数据版本');
-    }
 
-    // Clear all existing data
-    for (final i in await db.getAllInspirations()) {
-      await db.deleteChatMessagesByInspirationId(i.id);
-    }
-    final allLinks = await db.getAllInspirationLinks();
-    for (final l in allLinks) {
-      await db.deleteInspirationLink(l.id);
-    }
-    final allClusters = await db.getAllClusters();
-    for (final c in allClusters) {
-      await db.deleteCluster(c.id);
-    }
-    final allTasks = await db.getAllTasks();
-    for (final t in allTasks) {
-      await db.deleteTask(t.id);
-    }
-    final allProjects = await db.getAllProjects();
-    for (final p in allProjects) {
-      await db.deleteProject(p.id);
-    }
-    final allInspirations = await db.getAllInspirations();
-    for (final i in allInspirations) {
-      await db.deleteInspiration(i.id);
-    }
-    await db.deleteAllSources();
-    final existingAttachments = await db.getAllAttachments();
-    for (final a in existingAttachments) {
-      await _deleteAttachmentFile(a.filePath);
-      await db.deleteAttachment(a.id);
-    }
-    await db.deleteAllDeletedRecords();
-    await db.deleteAllReports();
+    await db.transaction(() async {
+      // Clear all existing rows
+      for (final i in await db.getAllInspirations()) {
+        await db.deleteChatMessagesByInspirationId(i.id);
+      }
+      final allLinks = await db.getAllInspirationLinks();
+      for (final l in allLinks) {
+        await db.deleteInspirationLink(l.id);
+      }
+      final allClusters = await db.getAllClusters();
+      for (final c in allClusters) {
+        await db.deleteCluster(c.id);
+      }
+      final allTasks = await db.getAllTasks();
+      for (final t in allTasks) {
+        await db.deleteTask(t.id);
+      }
+      final allProjects = await db.getAllProjects();
+      for (final p in allProjects) {
+        await db.deleteProject(p.id);
+      }
+      final allInspirations = await db.getAllInspirations();
+      for (final i in allInspirations) {
+        await db.deleteInspiration(i.id);
+      }
+      await db.deleteAllSources();
+      // Rows are replaced, but files stay on disk so a failed import or a
+      // merge can never destroy locally stored attachments.
+      final existingAttachments = await db.getAllAttachments();
+      for (final a in existingAttachments) {
+        await db.deleteAttachment(a.id);
+      }
+      await db.deleteAllDeletedRecords();
+      await db.deleteAllReports();
 
-    // Import inspirations
-    for (final raw in data['inspirations'] as List) {
-      final i = raw as Map<String, dynamic>;
-      final tags = i['tags'];
-      final tagsStr =
-          tags is List ? jsonEncode(tags) : (tags as String? ?? '[]');
-      await db.insertInspiration(
-        InspirationsCompanion.insert(
-          id: Value(i['id'] as int),
-          content: i['content'] as String,
-          createdAt: i['createdAt'] as int,
-          updatedAt: i['updatedAt'] as int,
-          source:
-              i['source'] != null
-                  ? Value(i['source'] as String)
-                  : const Value.absent(),
-          tags: Value(tagsStr),
-          aiAnalysis:
-              i['aiAnalysis'] != null
-                  ? Value(i['aiAnalysis'] as String)
-                  : const Value.absent(),
-          mindMapData:
-              i['mindMapData'] != null
-                  ? Value(i['mindMapData'] as String)
-                  : const Value.absent(),
-          isPinned: Value(i['isPinned'] as bool),
-          reviewedAt:
-              i['reviewedAt'] != null
-                  ? Value(i['reviewedAt'] as int)
-                  : const Value.absent(),
-          needsFollowUp: Value(i['needsFollowUp'] as bool? ?? false),
-        ),
-      );
-    }
-
-    // Import projects
-    for (final raw in data['projects'] as List) {
-      final p = raw as Map<String, dynamic>;
-      await db.insertProject(
-        ProjectsCompanion.insert(
-          id: Value(p['id'] as int),
-          title: p['title'] as String,
-          createdAt: p['createdAt'] as int,
-          updatedAt: p['updatedAt'] as int,
-          inspirationId:
-              p['inspirationId'] != null
-                  ? Value(p['inspirationId'] as int)
-                  : const Value.absent(),
-          description: Value(p['description'] as String? ?? ''),
-          progress: Value(p['progress'] as int? ?? 0),
-          status: Value(p['status'] as String? ?? 'active'),
-          isPinned: Value(p['isPinned'] as bool? ?? false),
-        ),
-      );
-    }
-
-    // Import tasks
-    for (final raw in data['tasks'] as List) {
-      final t = raw as Map<String, dynamic>;
-      await db.insertTask(
-        TasksCompanion.insert(
-          id: Value(t['id'] as int),
-          projectId: t['projectId'] as int,
-          title: t['title'] as String,
-          createdAt: t['createdAt'] as int,
-          updatedAt: t['updatedAt'] as int,
-          isCompleted: Value(t['isCompleted'] as bool? ?? false),
-          isPinned: Value(t['isPinned'] as bool? ?? false),
-        ),
-      );
-    }
-
-    // Import custom sources
-    for (final raw in data['customSources'] as List) {
-      final s = raw as Map<String, dynamic>;
-      await db.insertSource(
-        CustomSourcesCompanion.insert(
-          id: Value(s['id'] as int),
-          name: s['name'] as String,
-          icon: s['icon'] as String,
-          createdAt: s['createdAt'] as int,
-          sortOrder: Value(s['sortOrder'] as int? ?? 0),
-          isBuiltIn: Value(s['isBuiltIn'] as bool? ?? false),
-        ),
-      );
-    }
-
-    // Import attachments (version 2+)
-    if (version >= 2 && data['attachments'] != null) {
-      for (final raw in data['attachments'] as List) {
-        final a = raw as Map<String, dynamic>;
-        final restoredPath = await _restoreAttachmentFile(a);
-        await db.insertAttachment(
-          AttachmentsCompanion.insert(
-            id: Value(a['id'] as int),
-            ownerType: a['ownerType'] as String,
-            ownerId: a['ownerId'] as int,
-            fileName: a['fileName'] as String,
-            filePath: restoredPath,
-            mimeType: a['mimeType'] as String,
-            size: Value(a['size'] as int? ?? 0),
-            createdAt: a['createdAt'] as int,
+      // Import inspirations
+      for (final raw in data['inspirations'] as List) {
+        final i = raw as Map<String, dynamic>;
+        final tags = i['tags'];
+        final tagsStr =
+            tags is List ? jsonEncode(tags) : (tags as String? ?? '[]');
+        await db.insertInspiration(
+          InspirationsCompanion.insert(
+            id: Value(i['id'] as int),
+            content: i['content'] as String,
+            createdAt: i['createdAt'] as int,
+            updatedAt: i['updatedAt'] as int,
+            source:
+                i['source'] != null
+                    ? Value(i['source'] as String)
+                    : const Value.absent(),
+            tags: Value(tagsStr),
+            aiAnalysis:
+                i['aiAnalysis'] != null
+                    ? Value(i['aiAnalysis'] as String)
+                    : const Value.absent(),
+            mindMapData:
+                i['mindMapData'] != null
+                    ? Value(i['mindMapData'] as String)
+                    : const Value.absent(),
+            isPinned: Value(i['isPinned'] as bool),
+            reviewedAt:
+                i['reviewedAt'] != null
+                    ? Value(i['reviewedAt'] as int)
+                    : const Value.absent(),
+            needsFollowUp: Value(i['needsFollowUp'] as bool? ?? false),
           ),
         );
       }
-    }
 
-    // Import chat messages (version 3+)
-    if (version >= 3 && data['chatMessages'] != null) {
-      for (final raw in data['chatMessages'] as List) {
-        final m = raw as Map<String, dynamic>;
-        await db.insertChatMessage(
-          ChatMessagesCompanion.insert(
-            id: Value(m['id'] as int),
-            inspirationId: m['inspirationId'] as int,
-            role: m['role'] as String,
-            content: m['content'] as String,
-            createdAt: m['createdAt'] as int,
+      // Import projects
+      for (final raw in data['projects'] as List) {
+        final p = raw as Map<String, dynamic>;
+        await db.insertProject(
+          ProjectsCompanion.insert(
+            id: Value(p['id'] as int),
+            title: p['title'] as String,
+            createdAt: p['createdAt'] as int,
+            updatedAt: p['updatedAt'] as int,
+            inspirationId:
+                p['inspirationId'] != null
+                    ? Value(p['inspirationId'] as int)
+                    : const Value.absent(),
+            description: Value(p['description'] as String? ?? ''),
+            progress: Value(p['progress'] as int? ?? 0),
+            status: Value(p['status'] as String? ?? 'active'),
+            isPinned: Value(p['isPinned'] as bool? ?? false),
           ),
         );
       }
-    }
 
-    // Import inspiration links (version 3+)
-    if (version >= 3 && data['inspirationLinks'] != null) {
-      for (final raw in data['inspirationLinks'] as List) {
-        final l = raw as Map<String, dynamic>;
-        await db.insertInspirationLink(
-          InspirationLinksCompanion.insert(
-            id: Value(l['id'] as int),
-            sourceId: l['sourceId'] as int,
-            targetId: l['targetId'] as int,
-            linkType: l['linkType'] as String,
-            relationLabel: Value(l['relationLabel'] as String?),
-            confidence: Value(l['confidence'] as double? ?? 0.5),
-            isAutoGenerated: Value(l['isAutoGenerated'] as bool? ?? false),
-            createdAt: l['createdAt'] as int,
+      // Import tasks
+      for (final raw in data['tasks'] as List) {
+        final t = raw as Map<String, dynamic>;
+        await db.insertTask(
+          TasksCompanion.insert(
+            id: Value(t['id'] as int),
+            projectId: t['projectId'] as int,
+            title: t['title'] as String,
+            createdAt: t['createdAt'] as int,
+            updatedAt: t['updatedAt'] as int,
+            isCompleted: Value(t['isCompleted'] as bool? ?? false),
+            isPinned: Value(t['isPinned'] as bool? ?? false),
           ),
         );
       }
-    }
 
-    // Import clusters (version 3+)
-    if (version >= 3 && data['clusters'] != null) {
-      for (final raw in data['clusters'] as List) {
-        final c = raw as Map<String, dynamic>;
-        await db.insertCluster(
-          ClustersCompanion.insert(
-            id: Value(c['id'] as int),
-            name: c['name'] as String,
-            description: Value(c['description'] as String? ?? ''),
-            createdAt: c['createdAt'] as int,
-            updatedAt: c['updatedAt'] as int,
+      // Import custom sources
+      for (final raw in data['customSources'] as List) {
+        final s = raw as Map<String, dynamic>;
+        await db.insertSource(
+          CustomSourcesCompanion.insert(
+            id: Value(s['id'] as int),
+            name: s['name'] as String,
+            icon: s['icon'] as String,
+            createdAt: s['createdAt'] as int,
+            sortOrder: Value(s['sortOrder'] as int? ?? 0),
+            isBuiltIn: Value(s['isBuiltIn'] as bool? ?? false),
           ),
         );
       }
-    }
 
-    // Import deletion tombstones (version 4+)
-    if (version >= 4 && data['deletedRecords'] != null) {
-      for (final raw in data['deletedRecords'] as List) {
-        final d = raw as Map<String, dynamic>;
-        await db.insertDeletedRecord(
-          DeletedRecordsCompanion.insert(
-            id: d['id'] != null ? Value(d['id'] as int) : const Value.absent(),
-            entityType: d['entityType'] as String,
-            entityId: d['entityId'] as int,
-            deletedAt: d['deletedAt'] as int,
-          ),
-        );
+      // Import attachments (version 2+)
+      if (version >= 2 && data['attachments'] != null) {
+        for (final raw in data['attachments'] as List) {
+          final a = raw as Map<String, dynamic>;
+          final restoredPath = await _restoreAttachmentFile(a);
+          await db.insertAttachment(
+            AttachmentsCompanion.insert(
+              id: Value(a['id'] as int),
+              ownerType: a['ownerType'] as String,
+              ownerId: a['ownerId'] as int,
+              fileName: a['fileName'] as String,
+              filePath: restoredPath,
+              mimeType: a['mimeType'] as String,
+              size: Value(a['size'] as int? ?? 0),
+              createdAt: a['createdAt'] as int,
+            ),
+          );
+        }
       }
-    }
 
-    if (version >= 5 && data['reports'] != null) {
-      for (final raw in data['reports'] as List) {
-        final r = raw as Map<String, dynamic>;
-        await db.insertReport(
-          ReportsCompanion.insert(
-            id: Value(r['id'] as int),
-            type: r['type'] as String,
-            content: r['content'] as String,
-            model: Value(r['model'] as String? ?? ''),
-            createdAt: r['createdAt'] as int,
-            updatedAt: r['updatedAt'] as int,
-          ),
-        );
+      // Import chat messages (version 3+)
+      if (version >= 3 && data['chatMessages'] != null) {
+        for (final raw in data['chatMessages'] as List) {
+          final m = raw as Map<String, dynamic>;
+          await db.insertChatMessage(
+            ChatMessagesCompanion.insert(
+              id: Value(m['id'] as int),
+              inspirationId: m['inspirationId'] as int,
+              role: m['role'] as String,
+              content: m['content'] as String,
+              createdAt: m['createdAt'] as int,
+            ),
+          );
+        }
       }
-    }
 
-    // Import AI settings
+      // Import inspiration links (version 3+)
+      if (version >= 3 && data['inspirationLinks'] != null) {
+        for (final raw in data['inspirationLinks'] as List) {
+          final l = raw as Map<String, dynamic>;
+          await db.insertInspirationLink(
+            InspirationLinksCompanion.insert(
+              id: Value(l['id'] as int),
+              sourceId: l['sourceId'] as int,
+              targetId: l['targetId'] as int,
+              linkType: l['linkType'] as String,
+              relationLabel: Value(l['relationLabel'] as String?),
+              confidence: Value((l['confidence'] as num?)?.toDouble() ?? 0.5),
+              isAutoGenerated: Value(l['isAutoGenerated'] as bool? ?? false),
+              createdAt: l['createdAt'] as int,
+            ),
+          );
+        }
+      }
+
+      // Import clusters (version 3+)
+      if (version >= 3 && data['clusters'] != null) {
+        for (final raw in data['clusters'] as List) {
+          final c = raw as Map<String, dynamic>;
+          await db.insertCluster(
+            ClustersCompanion.insert(
+              id: Value(c['id'] as int),
+              name: c['name'] as String,
+              description: Value(c['description'] as String? ?? ''),
+              createdAt: c['createdAt'] as int,
+              updatedAt: c['updatedAt'] as int,
+            ),
+          );
+        }
+      }
+
+      // Import deletion tombstones (version 4+)
+      if (version >= 4 && data['deletedRecords'] != null) {
+        for (final raw in data['deletedRecords'] as List) {
+          final d = raw as Map<String, dynamic>;
+          await db.insertDeletedRecord(
+            DeletedRecordsCompanion.insert(
+              id:
+                  d['id'] != null
+                      ? Value(d['id'] as int)
+                      : const Value.absent(),
+              entityType: d['entityType'] as String,
+              entityId: d['entityId'] as int,
+              deletedAt: d['deletedAt'] as int,
+            ),
+          );
+        }
+      }
+
+      // Import reports (version 5+)
+      if (version >= 5 && data['reports'] != null) {
+        for (final raw in data['reports'] as List) {
+          final r = raw as Map<String, dynamic>;
+          await db.insertReport(
+            ReportsCompanion.insert(
+              id: Value(r['id'] as int),
+              type: r['type'] as String,
+              content: r['content'] as String,
+              model: Value(r['model'] as String? ?? ''),
+              createdAt: r['createdAt'] as int,
+              updatedAt: r['updatedAt'] as int,
+            ),
+          );
+        }
+      }
+    });
+
+    // Import AI settings only after the database transaction has committed.
     final aiSettings = data['aiSettings'] as Map<String, dynamic>?;
     var aiSettingsChanged = false;
     if (aiSettings != null) {
@@ -513,6 +537,9 @@ class WebDavSyncService {
   Future<SyncResult> pullFromRemote() async {
     try {
       final client = await _getClient();
+      // downloadData() returns null only for HTTP 404; every other failure
+      // (timeout / network / 401 / 403 / malformed body) is thrown and
+      // aborts this restore without touching local data.
       final remoteData = await client.downloadData();
       if (remoteData == null) {
         return const SyncResult.failure('远端没有同步数据');
@@ -524,6 +551,7 @@ class WebDavSyncService {
       return SyncResult.success(
         message: '拉取成功',
         aiSettingsChanged: aiSettingsChanged,
+        credentialsRequired: await _needsAiKey(),
       );
     } catch (e) {
       return SyncResult.failure('拉取失败: $e');
@@ -535,7 +563,8 @@ class WebDavSyncService {
     try {
       final client = await _getClient();
       final localData = await _exportToJson();
-      await client.uploadData(localData);
+      // Credentials never leave the device in sync files.
+      await client.uploadData(_stripCredentials(localData));
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
@@ -550,14 +579,13 @@ class WebDavSyncService {
     try {
       final client = await _getClient();
 
-      // Fetch remote data
-      Map<String, dynamic>? remoteData;
-      try {
-        remoteData = await client.downloadData();
-      } catch (_) {
-        // Remote file doesn't exist, just push local
+      // Fetch remote data. Only an explicit 404 means "first sync"; network
+      // errors, timeouts and auth failures must abort instead of overwriting
+      // the remote file with local data.
+      final remoteData = await client.downloadData();
+      if (remoteData == null) {
         final localData = await _exportToJson();
-        await client.uploadData(localData);
+        await client.uploadData(_stripCredentials(localData));
         await webdavStorage.setLastSyncTime(
           DateTime.now().millisecondsSinceEpoch,
         );
@@ -568,13 +596,13 @@ class WebDavSyncService {
       final localData = await _exportToJson();
 
       // Merge
-      final merged = _mergeData(localData, remoteData!);
+      final merged = _mergeData(localData, remoteData);
 
-      // Save merged result locally
+      // Save merged result locally (validated + transactional)
       final aiSettingsChanged = await _importFromJson(merged);
 
-      // Upload merged result to remote
-      await client.uploadData(merged);
+      // Upload merged result to remote without any credentials
+      await client.uploadData(_stripCredentials(merged));
 
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
@@ -582,6 +610,7 @@ class WebDavSyncService {
       return SyncResult.success(
         message: '合并同步成功',
         aiSettingsChanged: aiSettingsChanged,
+        credentialsRequired: await _needsAiKey(),
       );
     } catch (e) {
       return SyncResult.failure('合并同步失败: $e');
@@ -634,6 +663,12 @@ class WebDavSyncService {
         'attachments',
       ),
       'deletedRecords': deletedRecords,
+      'reports': _mergeEntityList(
+        local['reports'],
+        remote['reports'],
+        deletedRecords,
+        'reports',
+      ),
       'aiSettings': _mergeAiSettings(
         (local['aiSettings'] as Map<String, dynamic>?) ?? {},
         (remote['aiSettings'] as Map<String, dynamic>?) ?? {},
@@ -787,24 +822,52 @@ class WebDavSyncService {
   }
 
   Future<Map<String, dynamic>> _exportAiSettings() async {
-    final openAiKey = await aiStorage.getApiKey('openai_compatible');
-    final anthropicKey = await aiStorage.getApiKey('anthropic_compatible');
     return {
       'selectedInterfaceId': aiStorage.selectedPresetId,
       'interfaces': {
         'openai_compatible': {
           'baseUrl': aiStorage.baseUrlForInterface('openai_compatible'),
           'model': aiStorage.modelForInterface('openai_compatible'),
-          if (openAiKey != null && openAiKey.isNotEmpty) 'apiKey': openAiKey,
         },
         'anthropic_compatible': {
           'baseUrl': aiStorage.baseUrlForInterface('anthropic_compatible'),
           'model': aiStorage.modelForInterface('anthropic_compatible'),
-          if (anthropicKey != null && anthropicKey.isNotEmpty)
-            'apiKey': anthropicKey,
         },
       },
     };
+  }
+
+  /// Removes credentials from an outgoing snapshot. Doing this at the upload
+  /// boundary also covers legacy remote snapshots that still contain keys.
+  static Map<String, dynamic> _stripCredentials(Map<String, dynamic> snapshot) {
+    final copy = Map<String, dynamic>.from(snapshot);
+
+    final aiSettings = copy['aiSettings'];
+    if (aiSettings is Map<String, dynamic>) {
+      final aiCopy = Map<String, dynamic>.from(aiSettings)..remove('apiKeys');
+      final interfaces = aiCopy['interfaces'];
+      if (interfaces is Map<String, dynamic>) {
+        aiCopy['interfaces'] = {
+          for (final entry in interfaces.entries)
+            entry.key:
+                entry.value is Map<String, dynamic>
+                    ? (Map<String, dynamic>.from(
+                      entry.value as Map<String, dynamic>,
+                    )..remove('apiKey'))
+                    : entry.value,
+        };
+      }
+      copy['aiSettings'] = aiCopy;
+    }
+
+    final webdavSettings = copy['webdavSettings'];
+    if (webdavSettings is Map<String, dynamic>) {
+      copy['webdavSettings'] = Map<String, dynamic>.from(
+        webdavSettings,
+      )..remove('password');
+    }
+
+    return copy;
   }
 
   Future<bool> _importAiSettings(Map<String, dynamic> settings) async {

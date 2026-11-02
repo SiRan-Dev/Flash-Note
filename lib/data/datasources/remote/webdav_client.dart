@@ -102,7 +102,11 @@ class WebDavClient {
     );
   }
 
-  /// Download JSON data from WebDAV. Returns null if file doesn't exist.
+  /// Download JSON data from WebDAV.
+  ///
+  /// Returns null ONLY when the remote file does not exist (HTTP 404).
+  /// Any other failure (timeout, network error, 401/403, malformed body)
+  /// throws so callers never mistake it for a first-time sync.
   Future<Map<String, dynamic>?> downloadData() async {
     try {
       final response = await _dio.request(
@@ -112,10 +116,20 @@ class WebDavClient {
           responseType: ResponseType.plain,
         ),
       );
-      if (response.statusCode == 200 && response.data != null) {
-        return jsonDecode(response.data as String) as Map<String, dynamic>;
+      final statusCode = response.statusCode;
+      if (statusCode == 404) return null;
+      if (statusCode != 200) {
+        throw Exception('远端同步文件读取失败（HTTP $statusCode）');
       }
-      return null;
+      final body = response.data;
+      if (body is! String || body.trim().isEmpty) {
+        throw const FormatException('远端同步文件为空或格式不正确');
+      }
+      final decoded = jsonDecode(body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('远端同步文件格式不正确');
+      }
+      return decoded;
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return null;
       rethrow;

@@ -1,7 +1,15 @@
+import 'dart:io';
+
+import 'package:drift/native.dart';
+import 'package:flashnote/data/datasources/local/ai_settings_storage.dart';
+import 'package:flashnote/data/datasources/local/app_database.dart';
+import 'package:flashnote/data/datasources/local/webdav_storage.dart';
 import 'package:flashnote/data/services/webdav_sync_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   group('WebDavSyncService merge', () {
     Map<String, dynamic> snapshot({
       List<Map<String, dynamic>> inspirations = const [],
@@ -115,6 +123,209 @@ void main() {
       expect(merged['deletedRecords'], [
         {'entityType': 'tasks', 'entityId': 7, 'deletedAt': 3000},
       ]);
+    });
+  });
+
+  group('WebDavSyncService reports merge', () {
+    Map<String, dynamic> snapshotWithReports(
+      List<Map<String, dynamic>> reports,
+    ) {
+      return {
+        'version': 5,
+        'exportedAt': '2026-05-16T00:00:00.000',
+        'inspirations': <Map<String, dynamic>>[],
+        'projects': <Map<String, dynamic>>[],
+        'tasks': <Map<String, dynamic>>[],
+        'customSources': <Map<String, dynamic>>[],
+        'attachments': <Map<String, dynamic>>[],
+        'chatMessages': <Map<String, dynamic>>[],
+        'inspirationLinks': <Map<String, dynamic>>[],
+        'clusters': <Map<String, dynamic>>[],
+        'deletedRecords': <Map<String, dynamic>>[],
+        'reports': reports,
+        'aiSettings': <String, dynamic>{},
+      };
+    }
+
+    test('周报/月报/洞察纳入合并，不会被清空', () {
+      final merged = WebDavSyncService.mergeSnapshotsForTesting(
+        snapshotWithReports([
+          {
+            'id': 1,
+            'type': 'weekly',
+            'content': '本地周报',
+            'model': 'm',
+            'createdAt': 1000,
+            'updatedAt': 2000,
+          },
+        ]),
+        snapshotWithReports([
+          {
+            'id': 2,
+            'type': 'monthly',
+            'content': '远端月报',
+            'model': 'm',
+            'createdAt': 1500,
+            'updatedAt': 2500,
+          },
+        ]),
+      );
+
+      final reports =
+          (merged['reports'] as List).cast<Map<String, dynamic>>();
+      expect(reports, hasLength(2));
+      expect(reports.map((r) => r['id']), containsAll([1, 2]));
+    });
+  });
+
+  group('WebDavSyncService credential stripping', () {
+    test('上传快照不包含 API Key 与 WebDAV 密码', () {
+      final stripped = WebDavSyncService.stripCredentialsForTesting({
+        'version': 6,
+        'aiSettings': {
+          'interfaces': {
+            'openai_compatible': {
+              'baseUrl': 'https://api.example.com/v1',
+              'model': 'gpt',
+              'apiKey': 'sk-secret',
+            },
+          },
+          'apiKeys': {'legacy': 'sk-legacy'},
+        },
+        'webdavSettings': {
+          'serverUrl': 'https://dav.example.com',
+          'username': 'user',
+          'password': 'dav-secret',
+        },
+      });
+
+      final aiSettings = stripped['aiSettings'] as Map<String, dynamic>;
+      expect(aiSettings.containsKey('apiKeys'), isFalse);
+      final interfaces =
+          aiSettings['interfaces'] as Map<String, dynamic>;
+      final openAi = interfaces['openai_compatible'] as Map<String, dynamic>;
+      expect(openAi.containsKey('apiKey'), isFalse);
+      expect(openAi['baseUrl'], 'https://api.example.com/v1');
+
+      final webdavSettings =
+          stripped['webdavSettings'] as Map<String, dynamic>;
+      expect(webdavSettings.containsKey('password'), isFalse);
+      expect(webdavSettings['username'], 'user');
+    });
+  });
+
+  group('WebDavSyncService import safety', () {
+    late AppDatabase db;
+    late WebDavSyncService service;
+
+    Map<String, dynamic> emptySnapshot({
+      List<Map<String, dynamic>> inspirations = const [],
+    }) {
+      return {
+        'version': 6,
+        'exportedAt': '2026-05-16T00:00:00.000',
+        'inspirations': inspirations,
+        'projects': <Map<String, dynamic>>[],
+        'tasks': <Map<String, dynamic>>[],
+        'customSources': <Map<String, dynamic>>[],
+        'attachments': <Map<String, dynamic>>[],
+        'chatMessages': <Map<String, dynamic>>[],
+        'inspirationLinks': <Map<String, dynamic>>[],
+        'clusters': <Map<String, dynamic>>[],
+        'deletedRecords': <Map<String, dynamic>>[],
+        'reports': <Map<String, dynamic>>[],
+      };
+    }
+
+    setUp(() async {
+      db = AppDatabase.forTesting(NativeDatabase.memory());
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      service = WebDavSyncService(
+        db: db,
+        aiStorage: AiSettingsStorage(prefs: prefs),
+        webdavStorage: WebDavStorage(prefs: prefs),
+      );
+      await db.insertInspiration(
+        InspirationsCompanion.insert(
+          content: '本地已有灵感',
+          createdAt: 1000,
+          updatedAt: 1000,
+        ),
+      );
+    });
+
+    tearDown(() async {
+      await db.close();
+    });
+
+    test('快照校验失败时本地数据保持不变', () async {
+      final invalid = emptySnapshot(
+        inspirations: [
+          // 缺少必填的 content 字段
+          {'id': 1, 'createdAt': 1, 'updatedAt': 1, 'isPinned': false},
+        ],
+      );
+
+      await expectLater(
+        service.importSnapshotForTesting(invalid),
+        throwsFormatException,
+      );
+
+      final rows = await db.getAllInspirations();
+      expect(rows, hasLength(1));
+      expect(rows.single.content, '本地已有灵感');
+    });
+
+    test('写库失败时事务回滚，本地数据保持不变', () async {
+      final duplicateIds = emptySnapshot(
+        inspirations: [
+          {
+            'id': 1,
+            'content': 'A',
+            'createdAt': 1,
+            'updatedAt': 1,
+            'isPinned': false,
+          },
+          {
+            'id': 1,
+            'content': 'B',
+            'createdAt': 2,
+            'updatedAt': 2,
+            'isPinned': false,
+          },
+        ],
+      );
+
+      await expectLater(
+        service.importSnapshotForTesting(duplicateIds),
+        throwsA(anything),
+      );
+
+      final rows = await db.getAllInspirations();
+      expect(rows, hasLength(1));
+      expect(rows.single.content, '本地已有灵感');
+    });
+
+    test('导入不会删除本地附件文件', () async {
+      final tempDir = await Directory.systemTemp.createTemp('flashnote_test');
+      final attachmentFile = File('${tempDir.path}/note.txt');
+      await attachmentFile.writeAsString('附件内容');
+      await db.insertAttachment(
+        AttachmentsCompanion.insert(
+          ownerType: 'inspiration',
+          ownerId: 1,
+          fileName: 'note.txt',
+          filePath: attachmentFile.path,
+          mimeType: 'text/plain',
+          createdAt: 1000,
+        ),
+      );
+
+      await service.importSnapshotForTesting(emptySnapshot());
+
+      expect(await attachmentFile.exists(), isTrue);
+      await tempDir.delete(recursive: true);
     });
   });
 }

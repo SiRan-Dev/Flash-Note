@@ -854,6 +854,12 @@ abstract class AppLocalizations {
   /// **'导入失败'**
   String get importFailed;
 
+  /// No description provided for @credentialsNotIncluded.
+  ///
+  /// In zh, this message translates to:
+  /// **'导入/同步的数据不包含 API Key 和 WebDAV 密码，请在本机重新填写。'**
+  String get credentialsNotIncluded;
+
   /// No description provided for @importConfirm.
   ///
   /// In zh, this message translates to:
