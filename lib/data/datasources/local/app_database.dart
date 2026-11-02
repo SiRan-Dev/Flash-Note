@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:flashnote/core/constants/app_constants.dart';
 import 'package:flashnote/data/datasources/local/connection/connection.dart';
+import 'package:flashnote/data/datasources/local/connection/migration_v11_to_v12.dart';
+import 'package:flashnote/data/datasources/local/entity_uuids.dart';
 import 'package:flashnote/data/datasources/local/schema_versions.dart';
 import 'package:flashnote/data/datasources/local/tables/attachment_table.dart';
 import 'package:flashnote/data/datasources/local/tables/chat_message_table.dart';
@@ -121,7 +123,7 @@ class AppDatabase extends _$AppDatabase {
       await m.runMigrationSteps(
         from: from > 11 ? from : 11,
         to: to,
-        steps: migrationSteps(),
+        steps: migrationSteps(from11To12: migrateFrom11To12),
       );
     }
   }
@@ -160,9 +162,10 @@ class AppDatabase extends _$AppDatabase {
 
   Future<List<Inspiration>> getAllInspirations() =>
       (select(inspirations)..orderBy([
-        (t) => OrderingTerm.desc(t.isPinned),
-        (t) => OrderingTerm.desc(t.createdAt),
-      ])).get();
+            (t) => OrderingTerm.desc(t.isPinned),
+            (t) => OrderingTerm.desc(t.createdAt),
+          ]))
+          .get();
 
   Future<List<Inspiration>> searchInspirations(String query) =>
       (select(inspirations)
@@ -190,8 +193,18 @@ class AppDatabase extends _$AppDatabase {
   Future<int> insertInspiration(InspirationsCompanion entry) =>
       into(inspirations).insert(entry);
 
-  Future<bool> updateInspiration(InspirationsCompanion entry) =>
-      update(inspirations).replace(entry);
+  Future<bool> updateInspiration(InspirationsCompanion entry) async {
+    // replace 会把缺失的列写成 SQL 默认值，而 uuid 的 SQL 默认值是 ''。
+    // 编辑记录时必须显式带上原有 uuid，否则跨设备身份会被清空。
+    final id = entry.id.present ? entry.id.value : null;
+    if (id == null) return false;
+    final existing = await getInspirationById(id);
+    if (existing == null) return false;
+    final uuid = entry.uuid.present ? entry.uuid.value : existing.uuid;
+    return await update(
+      inspirations,
+    ).replace(entry.copyWith(uuid: Value(uuid)));
+  }
 
   Future<int> updateInspirationPartial(int id, InspirationsCompanion entry) =>
       (update(inspirations)..where((t) => t.id.equals(id))).write(entry);
@@ -201,15 +214,43 @@ class AppDatabase extends _$AppDatabase {
 
   // === CustomSources ===
 
-  Future<List<CustomSource>> getAllSources() =>
-      (select(customSources)
-        ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
+  Future<List<CustomSource>> getAllSources() => (select(
+    customSources,
+  )..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
 
-  Future<int> insertSource(CustomSourcesCompanion entry) =>
-      into(customSources).insert(entry);
+  Future<int> insertSource(CustomSourcesCompanion entry) async {
+    if (entry.uuid.present) return await into(customSources).insert(entry);
 
-  Future<bool> updateSource(CustomSourcesCompanion entry) =>
-      update(customSources).replace(entry);
+    // 自定义来源保持随机 UUID；内置来源按 name 确定性生成，保证两端一致。
+    final isBuiltIn = entry.isBuiltIn.present && entry.isBuiltIn.value;
+    if (!isBuiltIn) return await into(customSources).insert(entry);
+
+    final name = entry.name.present ? entry.name.value : '';
+    final baseUuid = deterministicBuiltInSourceUuid(name);
+    final taken = await (select(
+      customSources,
+    )..where((t) => t.uuid.equals(baseUuid))).getSingleOrNull();
+    final uuid = taken == null
+        ? baseUuid
+        : entry.id.present
+        ? deterministicBuiltInSourceUuid(name, discriminator: entry.id.value)
+        : newUuidV4();
+
+    return await into(customSources).insert(entry.copyWith(uuid: Value(uuid)));
+  }
+
+  Future<bool> updateSource(CustomSourcesCompanion entry) async {
+    final id = entry.id.present ? entry.id.value : null;
+    if (id == null) return false;
+    final existing = await (select(
+      customSources,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    if (existing == null) return false;
+    final uuid = entry.uuid.present ? entry.uuid.value : existing.uuid;
+    return await update(
+      customSources,
+    ).replace(entry.copyWith(uuid: Value(uuid)));
+  }
 
   Future<int> updateSourcePartial(int id, CustomSourcesCompanion entry) =>
       (update(customSources)..where((t) => t.id.equals(id))).write(entry);
@@ -223,9 +264,10 @@ class AppDatabase extends _$AppDatabase {
 
   Future<List<Project>> getAllProjects() =>
       (select(projects)..orderBy([
-        (t) => OrderingTerm.desc(t.isPinned),
-        (t) => OrderingTerm.desc(t.updatedAt),
-      ])).get();
+            (t) => OrderingTerm.desc(t.isPinned),
+            (t) => OrderingTerm.desc(t.updatedAt),
+          ]))
+          .get();
 
   Future<Project?> getProjectById(int id) =>
       (select(projects)..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -233,8 +275,14 @@ class AppDatabase extends _$AppDatabase {
   Future<int> insertProject(ProjectsCompanion entry) =>
       into(projects).insert(entry);
 
-  Future<bool> updateProject(ProjectsCompanion entry) =>
-      update(projects).replace(entry);
+  Future<bool> updateProject(ProjectsCompanion entry) async {
+    final id = entry.id.present ? entry.id.value : null;
+    if (id == null) return false;
+    final existing = await getProjectById(id);
+    if (existing == null) return false;
+    final uuid = entry.uuid.present ? entry.uuid.value : existing.uuid;
+    return await update(projects).replace(entry.copyWith(uuid: Value(uuid)));
+  }
 
   Future<int> updateProjectPartial(int id, ProjectsCompanion entry) =>
       (update(projects)..where((t) => t.id.equals(id))).write(entry);
@@ -260,7 +308,14 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> insertTask(TasksCompanion entry) => into(tasks).insert(entry);
 
-  Future<bool> updateTask(TasksCompanion entry) => update(tasks).replace(entry);
+  Future<bool> updateTask(TasksCompanion entry) async {
+    final id = entry.id.present ? entry.id.value : null;
+    if (id == null) return false;
+    final existing = await getTaskById(id);
+    if (existing == null) return false;
+    final uuid = entry.uuid.present ? entry.uuid.value : existing.uuid;
+    return await update(tasks).replace(entry.copyWith(uuid: Value(uuid)));
+  }
 
   Future<int> updateTaskPartial(int id, TasksCompanion entry) =>
       (update(tasks)..where((t) => t.id.equals(id))).write(entry);
@@ -296,20 +351,22 @@ class AppDatabase extends _$AppDatabase {
 
   // === Inspirations AI Data ===
 
-  Future<int> updateAiAnalysis(int id, String? aiAnalysis) => (update(
-    inspirations,
-  )..where((t) => t.id.equals(id))).write(
-    InspirationsCompanion(
-      aiAnalysis: aiAnalysis != null ? Value(aiAnalysis) : const Value.absent(),
-      updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
-    ),
-  );
+  Future<int> updateAiAnalysis(int id, String? aiAnalysis) =>
+      (update(inspirations)..where((t) => t.id.equals(id))).write(
+        InspirationsCompanion(
+          aiAnalysis: aiAnalysis != null
+              ? Value(aiAnalysis)
+              : const Value.absent(),
+          updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
+        ),
+      );
 
   Future<int> updateMindMapData(int id, String? mindMapData) =>
       (update(inspirations)..where((t) => t.id.equals(id))).write(
         InspirationsCompanion(
-          mindMapData:
-              mindMapData != null ? Value(mindMapData) : const Value.absent(),
+          mindMapData: mindMapData != null
+              ? Value(mindMapData)
+              : const Value.absent(),
           updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
         ),
       );
@@ -339,10 +396,10 @@ class AppDatabase extends _$AppDatabase {
         ),
       );
 
-  Future<int> toggleNeedsFollowUp(int id, bool value) => (update(inspirations)
-    ..where(
-      (t) => t.id.equals(id),
-    )).write(InspirationsCompanion(needsFollowUp: Value(value)));
+  Future<int> toggleNeedsFollowUp(int id, bool value) =>
+      (update(inspirations)..where((t) => t.id.equals(id))).write(
+        InspirationsCompanion(needsFollowUp: Value(value)),
+      );
 
   Future<List<Inspiration>> getRandomUnreviewed({int limit = 3}) async {
     final all =
@@ -386,20 +443,17 @@ class AppDatabase extends _$AppDatabase {
   Future<int> insertChatMessage(ChatMessagesCompanion entry) =>
       into(chatMessages).insert(entry);
 
-  Future<int> deleteChatMessagesByInspirationId(int inspirationId) =>
-      (delete(chatMessages)
-        ..where((t) => t.inspirationId.equals(inspirationId))).go();
+  Future<int> deleteChatMessagesByInspirationId(int inspirationId) => (delete(
+    chatMessages,
+  )..where((t) => t.inspirationId.equals(inspirationId))).go();
 
   // === GlobalChatMessages ===
 
-  Future<List<GlobalChatMessage>> getAllGlobalChatMessages() =>
-      (select(globalChatMessages)
-            ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-          .get();
+  Future<List<GlobalChatMessage>> getAllGlobalChatMessages() => (select(
+    globalChatMessages,
+  )..orderBy([(t) => OrderingTerm.asc(t.createdAt)])).get();
 
-  Future<int> insertGlobalChatMessage(
-    GlobalChatMessagesCompanion entry,
-  ) =>
+  Future<int> insertGlobalChatMessage(GlobalChatMessagesCompanion entry) =>
       into(globalChatMessages).insert(entry);
 
   Future<int> deleteAllGlobalChatMessages() => delete(globalChatMessages).go();
@@ -430,8 +484,9 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> deleteAttachmentsByOwner(String ownerType, int ownerId) =>
       (delete(attachments)..where(
-        (t) => t.ownerType.equals(ownerType) & t.ownerId.equals(ownerId),
-      )).go();
+            (t) => t.ownerType.equals(ownerType) & t.ownerId.equals(ownerId),
+          ))
+          .go();
 
   // === InspirationLinks ===
 
@@ -456,9 +511,9 @@ class AppDatabase extends _$AppDatabase {
             ..orderBy([(t) => OrderingTerm.desc(t.confidence)]))
           .get();
 
-  Future<InspirationLink?> getLinkById(int id) =>
-      (select(inspirationLinks)
-        ..where((t) => t.id.equals(id))).getSingleOrNull();
+  Future<InspirationLink?> getLinkById(int id) => (select(
+    inspirationLinks,
+  )..where((t) => t.id.equals(id))).getSingleOrNull();
 
   Future<int> insertInspirationLink(InspirationLinksCompanion entry) =>
       into(inspirationLinks).insert(entry);
@@ -469,25 +524,26 @@ class AppDatabase extends _$AppDatabase {
   Future<int> updateInspirationLink(int id, InspirationLinksCompanion entry) =>
       (update(inspirationLinks)..where((t) => t.id.equals(id))).write(entry);
 
-  Future<int> deleteLinksForInspiration(int id) =>
-      (delete(inspirationLinks)
-        ..where((t) => t.sourceId.equals(id) | t.targetId.equals(id))).go();
+  Future<int> deleteLinksForInspiration(int id) => (delete(
+    inspirationLinks,
+  )..where((t) => t.sourceId.equals(id) | t.targetId.equals(id))).go();
 
   Future<bool> linkExists(int sourceId, int targetId) async {
-    final query = select(inspirationLinks)..where(
-      (t) =>
-          (t.sourceId.equals(sourceId) & t.targetId.equals(targetId)) |
-          (t.sourceId.equals(targetId) & t.targetId.equals(sourceId)),
-    );
+    final query = select(inspirationLinks)
+      ..where(
+        (t) =>
+            (t.sourceId.equals(sourceId) & t.targetId.equals(targetId)) |
+            (t.sourceId.equals(targetId) & t.targetId.equals(sourceId)),
+      );
     final result = await query.getSingleOrNull();
     return result != null;
   }
 
   // === Clusters ===
 
-  Future<List<Cluster>> getAllClusters() =>
-      (select(clusters)
-        ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
+  Future<List<Cluster>> getAllClusters() => (select(
+    clusters,
+  )..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
 
   Future<Cluster?> getClusterById(int id) =>
       (select(clusters)..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -495,8 +551,14 @@ class AppDatabase extends _$AppDatabase {
   Future<int> insertCluster(ClustersCompanion entry) =>
       into(clusters).insert(entry);
 
-  Future<bool> updateCluster(ClustersCompanion entry) =>
-      update(clusters).replace(entry);
+  Future<bool> updateCluster(ClustersCompanion entry) async {
+    final id = entry.id.present ? entry.id.value : null;
+    if (id == null) return false;
+    final existing = await getClusterById(id);
+    if (existing == null) return false;
+    final uuid = entry.uuid.present ? entry.uuid.value : existing.uuid;
+    return await update(clusters).replace(entry.copyWith(uuid: Value(uuid)));
+  }
 
   Future<int> deleteCluster(int id) =>
       (delete(clusters)..where((t) => t.id.equals(id))).go();
@@ -512,8 +574,23 @@ class AppDatabase extends _$AppDatabase {
             ..limit(1))
           .getSingleOrNull();
 
-  Future<int> insertReport(ReportsCompanion entry) =>
-      into(reports).insert(entry);
+  Future<int> insertReport(ReportsCompanion entry) async {
+    if (entry.uuid.present) return await into(reports).insert(entry);
+
+    // 报告按 type 确定性生成 UUID；同一 type 的重复历史行用 id 区分。
+    final type = entry.type.present ? entry.type.value : '';
+    final baseUuid = deterministicReportUuid(type);
+    final taken = await (select(
+      reports,
+    )..where((t) => t.uuid.equals(baseUuid))).getSingleOrNull();
+    final uuid = taken == null
+        ? baseUuid
+        : entry.id.present
+        ? deterministicReportUuid(type, discriminator: entry.id.value)
+        : newUuidV4();
+
+    return await into(reports).insert(entry.copyWith(uuid: Value(uuid)));
+  }
 
   Future<int> upsertLatestReport(
     String type,
@@ -523,7 +600,7 @@ class AppDatabase extends _$AppDatabase {
     final existing = await getLatestReportByType(type);
     final now = DateTime.now().millisecondsSinceEpoch;
     if (existing == null) {
-      return insertReport(
+      return await insertReport(
         ReportsCompanion.insert(
           type: type,
           content: content,
@@ -533,7 +610,9 @@ class AppDatabase extends _$AppDatabase {
         ),
       );
     }
-    return (update(reports)..where((t) => t.id.equals(existing.id))).write(
+    return await (update(
+      reports,
+    )..where((t) => t.id.equals(existing.id))).write(
       ReportsCompanion(
         content: Value(content),
         model: Value(model),
@@ -551,20 +630,106 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> markRecordDeleted(String entityType, int entityId) async {
     final now = DateTime.now().millisecondsSinceEpoch;
+
+    // 墓碑必须携带被删实体的 UUID。实体已经被别的路径删掉时，优先沿用已有
+    // 墓碑的 UUID（重复删除保持同一条墓碑），否则退回确定性 UUID。
+    final existingTombstones =
+        await (select(deletedRecords)
+              ..where(
+                (t) =>
+                    t.entityType.equals(entityType) &
+                    t.entityId.equals(entityId),
+              )
+              ..limit(1))
+            .get();
+    final entityUuid =
+        await _findEntityUuid(entityType, entityId) ??
+        (existingTombstones.isEmpty
+            ? null
+            : existingTombstones.single.entityUuid) ??
+        legacyTombstoneUuid(entityType, entityId);
+
     await (delete(deletedRecords)..where(
-      (t) => t.entityType.equals(entityType) & t.entityId.equals(entityId),
-    )).go();
-    return into(deletedRecords).insert(
+          (t) =>
+              t.entityType.equals(entityType) & t.entityUuid.equals(entityUuid),
+        ))
+        .go();
+    return await into(deletedRecords).insert(
       DeletedRecordsCompanion.insert(
         entityType: entityType,
-        entityId: entityId,
+        entityUuid: Value(entityUuid),
+        entityId: Value<int?>(entityId),
         deletedAt: now,
       ),
     );
   }
 
-  Future<int> insertDeletedRecord(DeletedRecordsCompanion entry) =>
-      into(deletedRecords).insert(entry);
+  Future<int> insertDeletedRecord(DeletedRecordsCompanion entry) {
+    if (entry.entityUuid.present) return into(deletedRecords).insert(entry);
+
+    // 旧版快照（v5/v6）没有 entityUuid；用确定性的 legacy 映射补齐。
+    final entityType = entry.entityType.present ? entry.entityType.value : '';
+    final entityId = entry.entityId.present ? entry.entityId.value : null;
+    final entityUuid = entityId == null
+        ? newUuidV4()
+        : legacyTombstoneUuid(entityType, entityId);
+
+    return into(
+      deletedRecords,
+    ).insert(entry.copyWith(entityUuid: Value(entityUuid)));
+  }
+
+  Future<String?> _findEntityUuid(String entityType, int entityId) async {
+    switch (entityType) {
+      case 'inspirations':
+        final row = await (select(
+          inspirations,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'projects':
+        final row = await (select(
+          projects,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'tasks':
+        final row = await (select(
+          tasks,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'attachments':
+        final row = await (select(
+          attachments,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'reports':
+        final row = await (select(
+          reports,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'inspirationLinks':
+        final row = await (select(
+          inspirationLinks,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'clusters':
+        final row = await (select(
+          clusters,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'customSources':
+        final row = await (select(
+          customSources,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      case 'chatMessages':
+        final row = await (select(
+          chatMessages,
+        )..where((t) => t.id.equals(entityId))).getSingleOrNull();
+        return row?.uuid;
+      default:
+        return null;
+    }
+  }
 
   Future<int> deleteAllDeletedRecords() => delete(deletedRecords).go();
 }

@@ -7,7 +7,7 @@ class AppConstants {
   ///
   /// 迁移前的版本检测和备份逻辑在 native 连接中读取这个常量；修改 schema
   /// 时只需同步更新这里与 `AppDatabase.schemaVersion`。
-  static const int schemaVersion = 11;
+  static const int schemaVersion = 12;
 
   /// 迁移前备份文件所在的目录名（位于应用文档目录下）。
   static const String backupDirectoryName = 'flashnote_backups';
