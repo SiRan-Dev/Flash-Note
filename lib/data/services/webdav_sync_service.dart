@@ -38,11 +38,13 @@ class WebDavSyncService {
     required this.db,
     required this.aiStorage,
     required this.webdavStorage,
-  });
+    WebDavClient Function()? clientFactory,
+  }) : _clientFactory = clientFactory;
 
   final AppDatabase db;
   final AiSettingsStorage aiStorage;
   final WebDavStorage webdavStorage;
+  final WebDavClient Function()? _clientFactory;
 
   @visibleForTesting
   static Map<String, dynamic> mergeSnapshotsForTesting(
@@ -60,10 +62,12 @@ class WebDavSyncService {
       _importFromJson(data);
 
   Future<WebDavClient> _getClient() async {
+    final factory = _clientFactory;
+    if (factory != null) return factory();
     final user = await webdavStorage.username;
     final pass = await webdavStorage.password;
     if (user == null || pass == null) {
-      throw Exception('WebDAV 未配置');
+      throw const WebDavException('WebDAV 未配置');
     }
     return WebDavClient(
       serverUrl: webdavStorage.serverUrl,
@@ -75,7 +79,7 @@ class WebDavSyncService {
 
   Future<(bool, String)> testConnection() async {
     final client = await _getClient();
-    return client.testConnection();
+    return await client.testConnection();
   }
 
   Future<Map<String, dynamic>> _exportAttachment(
@@ -538,13 +542,13 @@ class WebDavSyncService {
     try {
       final client = await _getClient();
       // downloadData() returns null only for HTTP 404; every other failure
-      // (timeout / network / 401 / 403 / malformed body) is thrown and
-      // aborts this restore without touching local data.
-      final remoteData = await client.downloadData();
-      if (remoteData == null) {
+      // (timeout / network / 401 / 403 / malformed body) throws and aborts
+      // this restore without touching local data.
+      final download = await client.downloadData();
+      if (download == null) {
         return const SyncResult.failure('远端没有同步数据');
       }
-      final aiSettingsChanged = await _importFromJson(remoteData);
+      final aiSettingsChanged = await _importFromJson(download.data);
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
@@ -553,6 +557,8 @@ class WebDavSyncService {
         aiSettingsChanged: aiSettingsChanged,
         credentialsRequired: await _needsAiKey(),
       );
+    } on WebDavException catch (e) {
+      return SyncResult.failure('拉取失败：${e.message}');
     } catch (e) {
       return SyncResult.failure('拉取失败: $e');
     }
@@ -563,12 +569,39 @@ class WebDavSyncService {
     try {
       final client = await _getClient();
       final localData = await _exportToJson();
+
+      WebDavVersion? expectedVersion;
+      var createOnly = false;
+      try {
+        final remoteVersion = await client.fetchVersion();
+        if (remoteVersion == null) {
+          createOnly = true;
+        } else {
+          expectedVersion = remoteVersion;
+        }
+      } on WebDavAuthException {
+        rethrow;
+      } on WebDavException catch (e) {
+        // 部分 WebDAV 服务不支持 HEAD：退回原有的强制覆盖行为。
+        if (e.statusCode != 405 && e.statusCode != 501) rethrow;
+      }
+
       // Credentials never leave the device in sync files.
-      await client.uploadData(_stripCredentials(localData));
+      await client.uploadData(
+        _stripCredentials(localData),
+        expectedVersion: expectedVersion,
+        createOnly: createOnly,
+      );
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
       return const SyncResult.success(message: '推送成功');
+    } on WebDavConflictException {
+      return const SyncResult.failure(
+        '推送中止：远端已被其他设备修改，请重试（未写入远端）',
+      );
+    } on WebDavException catch (e) {
+      return SyncResult.failure('推送失败：${e.message}');
     } catch (e) {
       return SyncResult.failure('推送失败: $e');
     }
@@ -582,10 +615,19 @@ class WebDavSyncService {
       // Fetch remote data. Only an explicit 404 means "first sync"; network
       // errors, timeouts and auth failures must abort instead of overwriting
       // the remote file with local data.
-      final remoteData = await client.downloadData();
-      if (remoteData == null) {
+      final remote = await client.downloadData();
+      if (remote == null) {
         final localData = await _exportToJson();
-        await client.uploadData(_stripCredentials(localData));
+        try {
+          await client.uploadData(
+            _stripCredentials(localData),
+            createOnly: true,
+          );
+        } on WebDavConflictException {
+          return const SyncResult.failure(
+            '首次同步中止：远端已被其他设备创建，请重试（未覆盖远端）',
+          );
+        }
         await webdavStorage.setLastSyncTime(
           DateTime.now().millisecondsSinceEpoch,
         );
@@ -596,13 +638,22 @@ class WebDavSyncService {
       final localData = await _exportToJson();
 
       // Merge
-      final merged = _mergeData(localData, remoteData);
+      final merged = _mergeData(localData, remote.data);
 
-      // Save merged result locally (validated + transactional)
+      // Validate before uploading: never write a snapshot the local importer
+      // could not restore.
+      validateSnapshot(merged);
+
+      // Conditional write: if another device changed the remote file after
+      // our download, the server returns 412 and we do not overwrite it.
+      await client.uploadData(
+        _stripCredentials(merged),
+        expectedVersion: remote.version,
+      );
+
+      // Apply the merged result locally only after the upload succeeded, so a
+      // failed upload never changes local data.
       final aiSettingsChanged = await _importFromJson(merged);
-
-      // Upload merged result to remote without any credentials
-      await client.uploadData(_stripCredentials(merged));
 
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
@@ -612,6 +663,12 @@ class WebDavSyncService {
         aiSettingsChanged: aiSettingsChanged,
         credentialsRequired: await _needsAiKey(),
       );
+    } on WebDavConflictException {
+      return const SyncResult.failure(
+        '合并同步中止：远端已被其他设备更新，请重试（未写入远端）',
+      );
+    } on WebDavException catch (e) {
+      return SyncResult.failure('合并同步失败：${e.message}');
     } catch (e) {
       return SyncResult.failure('合并同步失败: $e');
     }
