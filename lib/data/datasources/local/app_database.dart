@@ -1,5 +1,7 @@
 import 'package:drift/drift.dart';
+import 'package:flashnote/core/constants/app_constants.dart';
 import 'package:flashnote/data/datasources/local/connection/connection.dart';
+import 'package:flashnote/data/datasources/local/schema_versions.dart';
 import 'package:flashnote/data/datasources/local/tables/attachment_table.dart';
 import 'package:flashnote/data/datasources/local/tables/chat_message_table.dart';
 import 'package:flashnote/data/datasources/local/tables/cluster_table.dart';
@@ -30,13 +32,19 @@ part 'app_database.g.dart';
   ],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(openConnection());
+  AppDatabase() : onMigrationFinishedForTesting = null, super(openConnection());
 
   // For testing with in-memory database
-  AppDatabase.forTesting(super.e);
+  AppDatabase.forTesting(super.e, {this.onMigrationFinishedForTesting});
+
+  /// Test-only hook called inside the migration transaction after every step.
+  ///
+  /// Throwing from it simulates a failure halfway through an upgrade, allowing
+  /// tests to assert that the transaction rolled everything back.
+  final Future<void> Function()? onMigrationFinishedForTesting;
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => AppConstants.schemaVersion;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -44,45 +52,109 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
     },
     onUpgrade: (Migrator m, int from, int to) async {
-      if (from < 2) {
-        await m.addColumn(inspirations, inspirations.mindMapData);
-      }
-      if (from < 3) {
-        await m.createTable(projects);
-        await m.createTable(tasks);
-      }
-      if (from < 4) {
-        await m.createTable(chatMessages);
-      }
-      if (from < 5) {
-        await m.createTable(attachments);
-      }
-      if (from < 6) {
-        await m.createTable(inspirationLinks);
-        await m.createTable(clusters);
-      }
-      if (from < 7) {
-        await customStatement(
-          'ALTER TABLE inspirations ADD COLUMN reviewed_at INTEGER',
-        );
-        await customStatement(
-          "ALTER TABLE inspirations ADD COLUMN needs_follow_up INTEGER NOT NULL DEFAULT 0",
-        );
-      }
-      if (from < 8) {
-        await m.createTable(deletedRecords);
-      }
-      if (from < 9) {
-        await m.createTable(reports);
-      }
-      if (from < 10) {
-        await m.addColumn(inspirationLinks, inspirationLinks.relationLabel);
-      }
-      if (from < 11) {
-        await m.createTable(globalChatMessages);
-      }
+      // drift 不会自动为 onUpgrade 包事务；这里把全部迁移步骤放进一个事务，
+      // 任何一步失败都会回滚 DDL，并让 drift 在成功后才写入 user_version。
+      await m.database.transaction(() async {
+        await _runUpgradeSteps(m, from, to);
+        await onMigrationFinishedForTesting?.call();
+      });
     },
   );
+
+  Future<void> _runUpgradeSteps(Migrator m, int from, int to) async {
+    if (from < 2) {
+      await _addColumnIfMissing(m, inspirations, inspirations.mindMapData);
+    }
+    if (from < 3) {
+      await m.createTable(projects);
+      await m.createTable(tasks);
+    }
+    if (from < 4) {
+      await m.createTable(chatMessages);
+    }
+    if (from < 5) {
+      await m.createTable(attachments);
+    }
+    if (from < 6) {
+      await m.createTable(inspirationLinks);
+      await m.createTable(clusters);
+    }
+    if (from < 7) {
+      // 保留历史 SQL 形态，但先检查列是否已存在，这样迁移被中断后重试
+      // 也不会再次 ADD COLUMN 而失败。
+      await _addRawColumnIfMissing(
+        m,
+        inspirations.actualTableName,
+        'reviewed_at',
+        'INTEGER',
+      );
+      await _addRawColumnIfMissing(
+        m,
+        inspirations.actualTableName,
+        'needs_follow_up',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (from < 8) {
+      await m.createTable(deletedRecords);
+    }
+    if (from < 9) {
+      await m.createTable(reports);
+    }
+    if (from < 10) {
+      await _addColumnIfMissing(
+        m,
+        inspirationLinks,
+        inspirationLinks.relationLabel,
+      );
+    }
+    if (from < 11) {
+      await m.createTable(globalChatMessages);
+    }
+
+    // v11 起交给 schema 基线驱动的增量迁移。修改 schema 后的维护流程：
+    //   dart run drift_dev schema dump lib/data/datasources/local/app_database.dart drift_schemas/
+    //   dart run drift_dev schema steps drift_schemas/ lib/data/datasources/local/schema_versions.dart
+    //   dart run drift_dev schema generate drift_schemas/ test/generated_migrations/
+    // 生成出的 from11To12 回调直接传给下面的 migrationSteps()。
+    if (to > 11 && from < to) {
+      await m.runMigrationSteps(
+        from: from > 11 ? from : 11,
+        to: to,
+        steps: migrationSteps(),
+      );
+    }
+  }
+
+  Future<void> _addColumnIfMissing(
+    Migrator m,
+    TableInfo table,
+    GeneratedColumn column,
+  ) async {
+    final columns = await _tableColumns(m, table.actualTableName);
+    if (columns.contains(column.name)) return;
+    await m.addColumn(table, column);
+  }
+
+  Future<void> _addRawColumnIfMissing(
+    Migrator m,
+    String tableName,
+    String columnName,
+    String definition,
+  ) async {
+    final columns = await _tableColumns(m, tableName);
+    if (columns.contains(columnName)) return;
+    await m.database.customStatement(
+      'ALTER TABLE "$tableName" ADD COLUMN $columnName $definition',
+    );
+  }
+
+  Future<Set<String>> _tableColumns(Migrator m, String tableName) async {
+    final rows = await m.database
+        .customSelect('PRAGMA table_info("$tableName")')
+        .get();
+    return {for (final row in rows) row.read<String>('name')};
+  }
 
   // === Inspirations ===
 
