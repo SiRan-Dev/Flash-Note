@@ -1,5 +1,6 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 class WebDavStorage {
   WebDavStorage({
@@ -17,6 +18,7 @@ class WebDavStorage {
   static const _lastSyncTimeKey = 'webdav_last_sync_time';
   static const _usernameKey = 'webdav_username';
   static const _passwordKey = 'webdav_password';
+  static const _deviceIdKey = 'flashnote_device_id';
 
   static const defaultServerUrl = 'https://dav.jianguoyun.com/dav/';
   static const defaultRemotePath = '/FlashNote/';
@@ -45,6 +47,15 @@ class WebDavStorage {
   Future<String?> get username => _secureStorage.read(key: _usernameKey);
 
   Future<String?> get password => _secureStorage.read(key: _passwordKey);
+
+  /// 本机稳定身份，用于合并时对 updatedAt 相同的记录做确定性裁决。
+  Future<String> getOrCreateDeviceId() async {
+    final existing = _prefs.getString(_deviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final created = const Uuid().v4();
+    await _prefs.setString(_deviceIdKey, created);
+    return created;
+  }
 
   Future<void> setServerUrl(String url) => _prefs.setString(_serverUrlKey, url);
 

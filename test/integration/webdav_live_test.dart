@@ -63,7 +63,17 @@ void main() {
         'PUT',
         _fileUri(_envServer),
         body: utf8.encode(
-          jsonEncode(_snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)])),
+          jsonEncode(
+            _snapshot(
+              inspirations: [
+                _inspiration(
+                  '00000000-0000-4000-8000-000000000002',
+                  '远端灵感',
+                  2000,
+                ),
+              ],
+            ),
+          ),
         ),
       );
       final putEtag = put.firstHeader('etag');
@@ -110,7 +120,17 @@ void main() {
         'PUT',
         _fileUri(_envServer),
         body: utf8.encode(
-          jsonEncode(_snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)])),
+          jsonEncode(
+            _snapshot(
+              inspirations: [
+                _inspiration(
+                  '00000000-0000-4000-8000-000000000002',
+                  '远端灵感',
+                  2000,
+                ),
+              ],
+            ),
+          ),
         ),
         extraHeaders: {'If-Match': putEtag!},
       );
@@ -180,7 +200,7 @@ void main() {
       expect(_header(moves.single, 'Overwrite'), 'T');
       expect(
         _header(moves.single, 'Destination'),
-        endsWith('/FlashNote/flashnote_sync.json'),
+        endsWith('/FlashNote/flashnote_sync_v7.json'),
       );
       expect(
         ctx.recorder.events.any(
@@ -198,10 +218,58 @@ void main() {
       await ctx.dispose();
     }, skip: _skipLive);
 
+    test('旧文件名隔离：远端只有 v6 旧文件 -> 升级并发布到 v7 文件，旧文件不动', () async {
+      await _deleteRemote();
+      await _raw('MKCOL', Uri.parse('$_envServer/FlashNote/'));
+      final legacyBody = jsonEncode(
+        _legacySnapshot(inspirations: [_legacyInspiration(2, '旧文件灵感', 2000)]),
+      );
+      await _raw(
+        'PUT',
+        _fileUri(_envServer, 'flashnote_sync.json'),
+        body: utf8.encode(legacyBody),
+      );
+      final before = await _raw(
+        'GET',
+        _fileUri(_envServer, 'flashnote_sync.json'),
+      );
+
+      final ctx = await _makeCtx();
+      final result = await ctx.service.mergeSync();
+      final after = await _raw(
+        'GET',
+        _fileUri(_envServer, 'flashnote_sync.json'),
+      );
+      final v7 = await _raw('GET', _fileUri(_envServer));
+      _evidence(
+        'legacy upgrade result=${result.isSuccess} "${result.message}"\n'
+        '  v7 status=${v7.status} contents=${_contents(v7.text)}\n'
+        '  legacy unchanged=${before.text == after.text}',
+      );
+
+      expect(result.isSuccess, isTrue);
+      expect(v7.status, 200);
+      expect(_contents(v7.text), containsAll(['本地灵感', '旧文件灵感']));
+      // 旧客户端仍可能继续写旧文件，新客户端升级后不再覆盖它。
+      expect(after.text, before.text);
+      expect(
+        ctx.recorder.events.any(
+          (e) => e.startsWith('PUT ') && e.contains('/flashnote_sync.json'),
+        ),
+        isFalse,
+      );
+
+      await ctx.dispose();
+    }, skip: _skipLive);
+
     test('正常合并：两端各自新增 -> 临时对象 + MOVE，双方数据都在', () async {
       await _deleteRemote();
       await _seedRemote(
-        _snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)]),
+        _snapshot(
+          inspirations: [
+            _inspiration('00000000-0000-4000-8000-000000000002', '远端灵感', 2000),
+          ],
+        ),
       );
       final before = await _raw('HEAD', _fileUri(_envServer));
       final beforeEtag = before.firstHeader('etag');
@@ -243,7 +311,11 @@ void main() {
     test('并发冲突：GET 之后另一客户端写入 -> 412 中止，本地与远端均不被覆盖', () async {
       await _deleteRemote();
       await _seedRemote(
-        _snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)]),
+        _snapshot(
+          inspirations: [
+            _inspiration('00000000-0000-4000-8000-000000000002', '远端灵感', 2000),
+          ],
+        ),
       );
 
       final ctx = await _makeCtx(serverUrl: '$_envProxy/race');
@@ -263,10 +335,7 @@ void main() {
       expect(_contents(remote.text), ['另一台设备写入的灵感']);
       // 旧实现会在 PUT 上得到 412；新实现先写临时对象，冲突在 MOVE 前的
       // 正式文件复核阶段被发现，因此这里断言没有 MOVE。
-      expect(
-        ctx.recorder.requests.any((r) => r.method == 'MOVE'),
-        isFalse,
-      );
+      expect(ctx.recorder.requests.any((r) => r.method == 'MOVE'), isFalse);
 
       final local = await ctx.db.getAllInspirations();
       expect(local, hasLength(1));
@@ -278,7 +347,11 @@ void main() {
     test('网络中断：PUT 中途断连 -> 远端仍是合法完整快照', () async {
       await _deleteRemote();
       await _seedRemote(
-        _snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)]),
+        _snapshot(
+          inspirations: [
+            _inspiration('00000000-0000-4000-8000-000000000002', '远端灵感', 2000),
+          ],
+        ),
       );
 
       final ctx = await _makeCtx(serverUrl: '$_envProxy/cut');
@@ -309,17 +382,8 @@ void main() {
       expect(after.status, 200);
       expect(_isValidSnapshot(after.text), isTrue);
       final contents = _contents(after.text);
-      expect(
-        contents,
-        anyOf(
-          equals(['远端灵感']),
-          containsAll(['本地灵感', '远端灵感']),
-        ),
-      );
-      expect(
-        ctx.recorder.requests.any((r) => r.method == 'MOVE'),
-        isFalse,
-      );
+      expect(contents, anyOf(equals(['远端灵感']), containsAll(['本地灵感', '远端灵感'])));
+      expect(ctx.recorder.requests.any((r) => r.method == 'MOVE'), isFalse);
 
       await ctx.dispose();
     }, skip: _skipLive);
@@ -362,7 +426,11 @@ void main() {
     test('重定向：GET 正常但 PUT 302 -> 报 serverUrl 错误，远端不被空 body 覆盖', () async {
       await _deleteRemote();
       await _seedRemote(
-        _snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)]),
+        _snapshot(
+          inspirations: [
+            _inspiration('00000000-0000-4000-8000-000000000002', '远端灵感', 2000),
+          ],
+        ),
       );
       final before = await _raw('GET', _fileUri(_envServer));
 
@@ -399,7 +467,9 @@ void main() {
     test(
       '大文件：远端超过 128 MiB -> 明确拒绝且内存不随文件增长',
       () async {
-        final file = File(p.join(_envRoot, 'FlashNote', 'flashnote_sync.json'));
+        final file = File(
+          p.join(_envRoot, 'FlashNote', 'flashnote_sync_v7.json'),
+        );
         final dio = Dio();
         addTearDown(() async {
           // 客户端提前中止 129 MiB 响应后，服务器可能仍持有文件句柄；
@@ -466,11 +536,15 @@ void main() {
     test('服务器不返回 ETag：退化为无条件 PUT，合并结果可预期', () async {
       await _deleteRemote();
       await _seedRemote(
-        _snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)]),
+        _snapshot(
+          inspirations: [
+            _inspiration('00000000-0000-4000-8000-000000000002', '远端灵感', 2000),
+          ],
+        ),
       );
       final head = await _raw(
         'HEAD',
-        Uri.parse('$_envProxy/noetag/FlashNote/flashnote_sync.json'),
+        Uri.parse('$_envProxy/noetag/FlashNote/flashnote_sync_v7.json'),
       );
       _evidence(
         'noetag HEAD -> ${head.status}, ETag=${head.firstHeader('etag')}, '
@@ -496,10 +570,7 @@ void main() {
       expect(result.publishMode, 'atomicMove');
       expect(_header(put, 'If-Match'), isNull);
       expect(_header(put, 'If-Unmodified-Since'), isNull);
-      expect(
-        ctx.recorder.requests.any((r) => r.method == 'MOVE'),
-        isTrue,
-      );
+      expect(ctx.recorder.requests.any((r) => r.method == 'MOVE'), isTrue);
       expect(_contents(remote.text), containsAll(['本地灵感', '远端灵感']));
 
       final local = await ctx.db.getAllInspirations();
@@ -510,26 +581,30 @@ void main() {
     test('MOVE 405 -> 双槽位降级，指针驱动后续读取', () async {
       await _deleteRemote();
       await _seedRemote(
-        _snapshot(inspirations: [_inspiration(2, '远端灵感', 2000)]),
+        _snapshot(
+          inspirations: [
+            _inspiration('00000000-0000-4000-8000-000000000002', '远端灵感', 2000),
+          ],
+        ),
       );
 
       final ctx = await _makeCtx(serverUrl: '$_envProxy/nomove');
       final first = await ctx.service.mergeSync();
       final pointer = await _raw(
         'GET',
-        _fileUri(_envServer, 'flashnote_sync.pointer.json'),
+        _fileUri(_envServer, 'flashnote_sync_v7.pointer.json'),
       );
       final slotA = await _raw(
         'GET',
-        _fileUri(_envServer, 'flashnote_sync.a.json'),
+        _fileUri(_envServer, 'flashnote_sync_v7.a.json'),
       );
-      final legacy = await _raw('GET', _fileUri(_envServer));
+      final mainFile = await _raw('GET', _fileUri(_envServer));
       _evidence(
         'nomove first=${first.isSuccess} "${first.message}"\n'
         '  mode=${first.publishMode}\n'
         '  pointer=${pointer.text}\n'
         '  slotA=${_contents(slotA.text)}\n'
-        '  legacy=${_contents(legacy.text)}\n'
+        '  main=${_contents(mainFile.text)}\n'
         '  events=${ctx.recorder.events}',
       );
 
@@ -541,17 +616,17 @@ void main() {
       expect(pointerJson['slot'], 'a');
       expect(pointerJson['size'], utf8.encode(slotA.text).length);
       expect(_contents(slotA.text), containsAll(['本地灵感', '远端灵感']));
-      // 旧正式文件保持完好，旧客户端仍可读取。
-      expect(_contents(legacy.text), ['远端灵感']);
+      // v7 正式文件保持完好，指针模式失败时仍有可读的旧版本。
+      expect(_contents(mainFile.text), ['远端灵感']);
 
       final second = await ctx.service.mergeSync();
       final pointer2 = await _raw(
         'GET',
-        _fileUri(_envServer, 'flashnote_sync.pointer.json'),
+        _fileUri(_envServer, 'flashnote_sync_v7.pointer.json'),
       );
       final slotB = await _raw(
         'GET',
-        _fileUri(_envServer, 'flashnote_sync.b.json'),
+        _fileUri(_envServer, 'flashnote_sync_v7.b.json'),
       );
       final pointerJson2 = jsonDecode(pointer2.text) as Map<String, dynamic>;
       _evidence(
@@ -571,7 +646,7 @@ void main() {
   }, skip: _skipLive);
 }
 
-Uri _fileUri(String base, [String name = 'flashnote_sync.json']) {
+Uri _fileUri(String base, [String name = 'flashnote_sync_v7.json']) {
   final normalized = base.endsWith('/')
       ? base.substring(0, base.length - 1)
       : base;
@@ -579,6 +654,36 @@ Uri _fileUri(String base, [String name = 'flashnote_sync.json']) {
 }
 
 Map<String, dynamic> _snapshot({
+  List<Map<String, dynamic>> inspirations = const [],
+}) {
+  return {
+    'version': 7,
+    'deviceId': 'device-remote',
+    'exportedAt': '2026-05-16T00:00:00.000',
+    'inspirations': inspirations,
+    'projects': <Map<String, dynamic>>[],
+    'tasks': <Map<String, dynamic>>[],
+    'customSources': <Map<String, dynamic>>[],
+    'attachments': <Map<String, dynamic>>[],
+    'chatMessages': <Map<String, dynamic>>[],
+    'inspirationLinks': <Map<String, dynamic>>[],
+    'clusters': <Map<String, dynamic>>[],
+    'deletedRecords': <Map<String, dynamic>>[],
+    'reports': <Map<String, dynamic>>[],
+  };
+}
+
+Map<String, dynamic> _inspiration(String uuid, String content, int timestamp) {
+  return {
+    'uuid': uuid,
+    'content': content,
+    'createdAt': timestamp,
+    'updatedAt': timestamp,
+    'isPinned': false,
+  };
+}
+
+Map<String, dynamic> _legacySnapshot({
   List<Map<String, dynamic>> inspirations = const [],
 }) {
   return {
@@ -597,7 +702,7 @@ Map<String, dynamic> _snapshot({
   };
 }
 
-Map<String, dynamic> _inspiration(int id, String content, int timestamp) {
+Map<String, dynamic> _legacyInspiration(int id, String content, int timestamp) {
   return {
     'id': id,
     'content': content,
@@ -632,6 +737,10 @@ String _preview(String text) {
 Future<void> _deleteRemote() async {
   // 删除所有发布形态，保证每个用例从干净状态开始。
   for (final name in [
+    'flashnote_sync_v7.json',
+    'flashnote_sync_v7.pointer.json',
+    'flashnote_sync_v7.a.json',
+    'flashnote_sync_v7.b.json',
     'flashnote_sync.json',
     'flashnote_sync.pointer.json',
     'flashnote_sync.a.json',

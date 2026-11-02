@@ -76,10 +76,17 @@ class WebDavPublishState {
 
 /// 下载结果：同步数据 + 下一次发布所需的状态。
 class WebDavDownload {
-  const WebDavDownload({required this.data, required this.publishState});
+  const WebDavDownload({
+    required this.data,
+    required this.publishState,
+    this.fromLegacyFile = false,
+  });
 
   final Map<String, dynamic> data;
   final WebDavPublishState publishState;
+
+  /// 数据来自旧文件名（v5/v6），调用方应先升级格式，再把结果发布到 v7 文件。
+  final bool fromLegacyFile;
 }
 
 /// 发布结果，供上层在同步结果里展示使用的模式。
@@ -110,9 +117,8 @@ class WebDavNotFoundException extends WebDavException {
 
 /// 条件写入失败（HTTP 412），说明远端已被其他设备修改。
 class WebDavConflictException extends WebDavException {
-  const WebDavConflictException([
-    super.message = '远端文件已被其他设备修改（HTTP 412）',
-  ]) : super(statusCode: 412);
+  const WebDavConflictException([super.message = '远端文件已被其他设备修改（HTTP 412）'])
+    : super(statusCode: 412);
 }
 
 /// 认证或授权失败（HTTP 401/403）。
@@ -127,6 +133,8 @@ class WebDavClient {
     required this.username,
     required this.password,
     this.remotePath = '/FlashNote/',
+    this.snapshotFileName = defaultSnapshotFileName,
+    this.legacySnapshotFileName = defaultLegacySnapshotFileName,
     Dio? dio,
     this.requestTimeout = const Duration(minutes: 5),
     this.maxDownloadBytes = defaultMaxDownloadBytes,
@@ -144,17 +152,27 @@ class WebDavClient {
   /// 单个快照的下载/校验体积上限，默认 128 MiB。
   static const int defaultMaxDownloadBytes = 128 * 1024 * 1024;
 
+  /// 新客户端专用的 v7 文件名；旧客户端只认 [defaultLegacySnapshotFileName]，
+  /// 因此两边永远不会互相覆盖。
+  static const String defaultSnapshotFileName = 'flashnote_sync_v7.json';
+  static const String defaultLegacySnapshotFileName = 'flashnote_sync.json';
+
   /// 指针文件上限，正常只有几十字节。
   static const int _maxPointerBytes = 4096;
 
-  static const String _legacyFileName = 'flashnote_sync.json';
-  static const String _pointerFileName = 'flashnote_sync.pointer.json';
   static const List<String> _slotNames = ['a', 'b'];
 
   final String serverUrl;
   final String username;
   final String password;
   final String remotePath;
+
+  /// v7 主文件名，例如 `flashnote_sync_v7.json`。
+  final String snapshotFileName;
+
+  /// 只读回退的旧文件名；为 null 时不读取旧文件。
+  final String? legacySnapshotFileName;
+
   final Duration requestTimeout;
   final int maxDownloadBytes;
   final Dio _dio;
@@ -170,14 +188,24 @@ class WebDavClient {
 
   String _urlFor(String fileName) => '$_baseUrl$_fullPath$fileName';
 
-  String get _legacyUrl => _urlFor(_legacyFileName);
+  String get _fileBase => snapshotFileName.endsWith('.json')
+      ? snapshotFileName.substring(0, snapshotFileName.length - 5)
+      : snapshotFileName;
 
-  String get _pointerUrl => _urlFor(_pointerFileName);
+  String get _mainUrl => _urlFor(snapshotFileName);
 
-  String _slotUrl(String slot) => _urlFor('flashnote_sync.$slot.json');
+  String? get _legacyUrl {
+    final name = legacySnapshotFileName;
+    return name == null ? null : _urlFor(name);
+  }
 
-  String _tempUrl() =>
-      _urlFor('flashnote_sync.${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}.tmp');
+  String get _pointerUrl => _urlFor('$_fileBase.pointer.json');
+
+  String _slotUrl(String slot) => _urlFor('$_fileBase.$slot.json');
+
+  String _tempUrl() => _urlFor(
+    '$_fileBase.${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}.tmp',
+  );
 
   Options get _authOptions => Options(
     headers: {
@@ -195,10 +223,7 @@ class WebDavClient {
           cancelToken: token,
           options: _authOptions.copyWith(
             method: 'PROPFIND',
-            headers: {
-              ..._authOptions.headers!,
-              'Depth': '0',
-            },
+            headers: {..._authOptions.headers!, 'Depth': '0'},
             responseType: ResponseType.plain,
             receiveDataWhenStatusError: false,
           ),
@@ -239,7 +264,7 @@ class WebDavClient {
   }
 
   /// 读取旧式正式文件的版本（HEAD）。返回 null 表示文件不存在。
-  Future<WebDavVersion?> fetchVersion() => _head(_legacyUrl);
+  Future<WebDavVersion?> fetchVersion() => _head(_mainUrl);
 
   /// 轻量探测发布状态（不下载快照正文），用于“推送”。
   Future<WebDavPublishState> probePublishState() async {
@@ -254,7 +279,7 @@ class WebDavClient {
     }
 
     try {
-      final version = await _head(_legacyUrl);
+      final version = await _head(_mainUrl);
       if (version == null) {
         return const WebDavPublishState.firstSync();
       }
@@ -311,53 +336,67 @@ class WebDavClient {
 
   /// 读取远端快照。
   ///
-  /// 先读指针文件：存在则按指针读槽位；不存在则兼容读取旧文件名。
+  /// 顺序：v7 指针 → v7 正式文件 → 旧文件（只读，用于升级）。
+  /// 旧客户端永远不会写 v7 文件，因此升级后旧文件可以安全地保持不动。
   Future<WebDavDownload?> downloadData() async {
     final pointer = await _readPointer(allowNotFound: true);
-    if (pointer == null) {
-      return await _downloadLegacy();
-    }
+    if (pointer != null) {
+      final slotDownload = await _downloadBytes(
+        _slotUrl(pointer.slot),
+        followRedirects: false,
+        label: '远端同步快照',
+      );
+      if (slotDownload == null || slotDownload.bytes.length != pointer.size) {
+        throw const WebDavException('远端同步指针指向的快照长度不一致，已中止（旧快照仍保留）');
+      }
+      final data = _requireSnapshot(slotDownload.bytes, label: '远端同步快照');
 
-    final slotDownload = await _downloadBytes(
-      _slotUrl(pointer.slot),
-      followRedirects: false,
-      label: '远端同步快照',
-    );
-    if (slotDownload == null || slotDownload.bytes.length != pointer.size) {
-      throw const WebDavException(
-        '远端同步指针指向的快照长度不一致，已中止（旧快照仍保留）',
+      return WebDavDownload(
+        data: data,
+        publishState: WebDavPublishState(
+          mode: WebDavPublishMode.dualSlotPointer,
+          version: pointer.version,
+          remoteExists: true,
+          activeSlot: pointer.slot,
+        ),
       );
     }
-    final data = _requireSnapshot(
-      slotDownload.bytes,
+
+    final mainDownload = await _downloadBytes(
+      _mainUrl,
+      allowNotFound: true,
       label: '远端同步快照',
     );
+    if (mainDownload != null) {
+      return WebDavDownload(
+        data: _requireSnapshot(mainDownload.bytes, label: '远端同步快照'),
+        publishState: WebDavPublishState(
+          mode: WebDavPublishMode.atomicMove,
+          version: mainDownload.version,
+          remoteExists: true,
+        ),
+      );
+    }
 
-    return WebDavDownload(
-      data: data,
-      publishState: WebDavPublishState(
-        mode: WebDavPublishMode.dualSlotPointer,
-        version: pointer.version,
-        remoteExists: true,
-        activeSlot: pointer.slot,
-      ),
-    );
+    return await _downloadLegacy();
   }
 
   Future<WebDavDownload?> _downloadLegacy() async {
+    final legacyUrl = _legacyUrl;
+    if (legacyUrl == null) return null;
+
     final downloaded = await _downloadBytes(
-      _legacyUrl,
+      legacyUrl,
       allowNotFound: true,
+      label: '远端旧同步文件',
     );
     if (downloaded == null) return null;
 
     return WebDavDownload(
-      data: _requireSnapshot(downloaded.bytes, label: '远端同步文件'),
-      publishState: WebDavPublishState(
-        mode: WebDavPublishMode.atomicMove,
-        version: downloaded.version,
-        remoteExists: true,
-      ),
+      data: _requireSnapshot(downloaded.bytes, label: '远端旧同步文件'),
+      // v7 目标文件还不存在：按首次创建处理，若其他设备抢先创建会 412 中止。
+      publishState: const WebDavPublishState.firstSync(),
+      fromLegacyFile: true,
     );
   }
 
@@ -373,7 +412,7 @@ class WebDavClient {
       _verifyWrittenObject(head, bytes.length, putVersion, '临时文件');
 
       if (state.revalidateDestination) {
-        final current = await _head(_legacyUrl);
+        final current = await _head(_mainUrl);
         if (!_destinationUnchanged(current, state)) {
           throw const WebDavConflictException('远端文件已被其他设备修改');
         }
@@ -392,7 +431,7 @@ class WebDavClient {
             method: 'MOVE',
             headers: {
               ..._authOptions.headers!,
-              'Destination': Uri.parse(_legacyUrl).toString(),
+              'Destination': Uri.parse(_mainUrl).toString(),
               'Overwrite': 'T',
             },
             responseType: ResponseType.plain,
@@ -605,7 +644,8 @@ class WebDavClient {
       headers['If-None-Match'] = '*';
     } else if (expectedVersion != null && expectedVersion.hasStrongEtag) {
       headers['If-Match'] = expectedVersion.etag;
-    } else if (expectedVersion != null && expectedVersion.lastModified != null) {
+    } else if (expectedVersion != null &&
+        expectedVersion.lastModified != null) {
       headers['If-Unmodified-Since'] = expectedVersion.lastModified;
     }
 
@@ -674,9 +714,7 @@ class WebDavClient {
     }
     final length = head.contentLength;
     if (length != null && length != expectedLength) {
-      throw WebDavException(
-        '$label 写入校验失败（长度 $length != $expectedLength）',
-      );
+      throw WebDavException('$label 写入校验失败（长度 $length != $expectedLength）');
     }
     if (putVersion.etag != null &&
         head.etag != null &&
@@ -715,10 +753,7 @@ class WebDavClient {
     return map;
   }
 
-  Map<String, dynamic> _requireMap(
-    List<int> bytes, {
-    required String label,
-  }) {
+  Map<String, dynamic> _requireMap(List<int> bytes, {required String label}) {
     final text = utf8.decode(bytes, allowMalformed: true);
     dynamic decoded;
     try {
@@ -751,10 +786,9 @@ class WebDavClient {
     final lastModified = headers.value('last-modified');
     return WebDavVersion(
       etag: (etag == null || etag.isEmpty) ? null : etag,
-      lastModified:
-          (lastModified == null || lastModified.isEmpty)
-              ? null
-              : lastModified,
+      lastModified: (lastModified == null || lastModified.isEmpty)
+          ? null
+          : lastModified,
       contentLength: _contentLength(headers),
     );
   }

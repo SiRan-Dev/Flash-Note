@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('WebDavClient download', () {
-    test('指针与旧文件都不存在 -> null（只有 404 表示首次同步）', () async {
+    test('指针、v7 文件与旧文件都不存在 -> null（只有 404 表示首次同步）', () async {
       final dav = _FakeDav();
       final client = _client(dav);
 
@@ -16,7 +16,22 @@ void main() {
 
       expect(result, isNull);
       expect(dav.requests.every((r) => r.method == 'GET'), isTrue);
-      expect(dav.requests, hasLength(2));
+      // 指针 + v7 主文件 + 旧文件回退，共三次只读探测。
+      expect(dav.requests, hasLength(3));
+    });
+
+    test('只有旧文件时只读回退，并告知调用方需要升级到 v7', () async {
+      final dav = _FakeDav();
+      dav.seedOldFile(jsonEncode(_validSnapshot()), etag: '"old"');
+      final client = _client(dav);
+
+      final result = await client.downloadData();
+
+      expect(result, isNotNull);
+      expect(result!.fromLegacyFile, isTrue);
+      expect(result.data['version'], 6);
+      expect(result.publishState.remoteExists, isFalse);
+      expect(dav.files.containsKey('flashnote_sync_v7.json'), isFalse);
     });
 
     test('GET 401 抛 WebDavAuthException 而不是 null', () async {
@@ -104,7 +119,7 @@ void main() {
 
     test('旧式文件路径：暴露 ETag/Last-Modified 给调用方', () async {
       final dav = _FakeDav();
-      dav.seedLegacy(
+      dav.seedSnapshot(
         jsonEncode(_validSnapshot()),
         etag: '"v1"',
         lastModified: 'Wed, 21 Oct 2015 07:28:00 GMT',
@@ -138,9 +153,9 @@ void main() {
           .where((r) => r.method == 'GET')
           .map((r) => _name(r))
           .toList();
-      expect(getNames, contains('flashnote_sync.pointer.json'));
-      expect(getNames, contains('flashnote_sync.b.json'));
-      expect(getNames, isNot(contains('flashnote_sync.json')));
+      expect(getNames, contains('flashnote_sync_v7.pointer.json'));
+      expect(getNames, contains('flashnote_sync_v7.b.json'));
+      expect(getNames, isNot(contains('flashnote_sync_v7.json')));
     });
 
     test('指针指向的槽位长度不一致时中止', () async {
@@ -235,6 +250,30 @@ void main() {
   });
 
   group('WebDavClient 原子发布', () {
+    test('旧客户端只写旧文件名，不会创建或覆盖 v7 文件', () async {
+      final dav = _FakeDav();
+      final client = _client(
+        dav,
+        snapshotFileName: 'flashnote_sync.json',
+        legacySnapshotFileName: null,
+      );
+
+      final result = await client.publishSnapshot(
+        _validSnapshot(),
+        const WebDavPublishState.firstSync(),
+      );
+
+      expect(result.mode, WebDavPublishMode.atomicMove);
+      expect(dav.files, contains('flashnote_sync.json'));
+      expect(dav.files.keys.where((k) => k.contains('v7')), isEmpty);
+      final move = dav.requests.lastWhere((r) => r.method == 'MOVE');
+      expect(move.headers['Destination'], endsWith('/flashnote_sync.json'));
+      expect(
+        dav.requests.map(_name),
+        isNot(contains(WebDavClient.defaultSnapshotFileName)),
+      );
+    });
+
     test('首次创建：临时对象 If-None-Match:* -> HEAD 校验 -> MOVE', () async {
       final dav = _FakeDav();
       final client = _client(dav);
@@ -253,15 +292,18 @@ void main() {
 
       final moves = dav.requests.where((r) => r.method == 'MOVE').toList();
       expect(moves, hasLength(1));
-      expect(moves.single.headers['Destination'], contains('flashnote_sync.json'));
+      expect(
+        moves.single.headers['Destination'],
+        contains('flashnote_sync_v7.json'),
+      );
       expect(moves.single.headers['Overwrite'], 'T');
       expect(moves.single.followRedirects, isFalse);
-      expect(dav.files, contains('flashnote_sync.json'));
+      expect(dav.files, contains('flashnote_sync_v7.json'));
     });
 
     test('临时对象被截断 -> 中止并清理，正式文件保持旧版本', () async {
       final dav = _FakeDav()
-        ..seedLegacy(jsonEncode(_validSnapshot()), etag: '"old"')
+        ..seedSnapshot(jsonEncode(_validSnapshot()), etag: '"old"')
         ..truncateTempOnPut = true;
       final client = _client(dav);
 
@@ -284,15 +326,9 @@ void main() {
       );
 
       expect(dav.requests.any((r) => r.method == 'MOVE'), isFalse);
-      expect(
-        dav.files['flashnote_sync.json']?.etag,
-        '"old"',
-      );
+      expect(dav.files['flashnote_sync_v7.json']?.etag, '"old"');
       // 临时对象被清理。
-      expect(
-        dav.files.keys.where((k) => k.endsWith('.tmp')),
-        isEmpty,
-      );
+      expect(dav.files.keys.where((k) => k.endsWith('.tmp')), isEmpty);
     });
 
     test('MOVE 失败保留临时对象并给出明确错误', () async {
@@ -314,10 +350,7 @@ void main() {
       );
 
       expect(dav.requests.any((r) => r.method == 'DELETE'), isFalse);
-      expect(
-        dav.files.keys.where((k) => k.endsWith('.tmp')),
-        hasLength(1),
-      );
+      expect(dav.files.keys.where((k) => k.endsWith('.tmp')), hasLength(1));
     });
 
     test('写入前发现正式文件已被其他设备创建 -> 412，不执行 MOVE', () async {
@@ -333,7 +366,7 @@ void main() {
       );
 
       expect(dav.requests.any((r) => r.method == 'MOVE'), isFalse);
-      expect(dav.files['flashnote_sync.json']?.etag, '"other"');
+      expect(dav.files['flashnote_sync_v7.json']?.etag, '"other"');
     });
 
     test('MOVE 405/501 自动降级为双槽位 + 指针', () async {
@@ -350,11 +383,11 @@ void main() {
           .where((r) => r.method == 'PUT')
           .map(_name)
           .toList();
-      expect(putNames, contains('flashnote_sync.a.json'));
-      expect(putNames, contains('flashnote_sync.pointer.json'));
-      expect(dav.files.containsKey('flashnote_sync.json'), isFalse);
-      expect(dav.files, contains('flashnote_sync.pointer.json'));
-      expect(dav.files, contains('flashnote_sync.a.json'));
+      expect(putNames, contains('flashnote_sync_v7.a.json'));
+      expect(putNames, contains('flashnote_sync_v7.pointer.json'));
+      expect(dav.files.containsKey('flashnote_sync_v7.json'), isFalse);
+      expect(dav.files, contains('flashnote_sync_v7.pointer.json'));
+      expect(dav.files, contains('flashnote_sync_v7.a.json'));
     });
 
     test('双槽位模式：写非活跃槽位并条件更新指针', () async {
@@ -365,21 +398,21 @@ void main() {
 
       final download = await client.downloadData();
       final result = await client.publishSnapshot(
-        _validSnapshot(inspirations: [
-          _inspiration(1, '新数据', 3000),
-        ]),
+        _validSnapshot(inspirations: [_inspiration(1, '新数据', 3000)]),
         download!.publishState,
       );
 
       expect(result.mode, WebDavPublishMode.dualSlotPointer);
       final pointerPut = dav.requests.lastWhere(
-        (r) => r.method == 'PUT' && _name(r) == 'flashnote_sync.pointer.json',
+        (r) =>
+            r.method == 'PUT' && _name(r) == 'flashnote_sync_v7.pointer.json',
       );
       expect(pointerPut.headers['If-Match'], '"ptr1"');
-      final pointer = jsonDecode(dav.files['flashnote_sync.pointer.json']!.text)
-          as Map<String, dynamic>;
+      final pointer =
+          jsonDecode(dav.files['flashnote_sync_v7.pointer.json']!.text)
+              as Map<String, dynamic>;
       expect(pointer['slot'], 'b');
-      expect(dav.files.containsKey('flashnote_sync.b.json'), isTrue);
+      expect(dav.files.containsKey('flashnote_sync_v7.b.json'), isTrue);
     });
 
     test('双槽位模式：指针被其他设备抢先更新 -> 412 中止', () async {
@@ -392,9 +425,7 @@ void main() {
       dav.failPointerPut = true;
       await expectLater(
         client.publishSnapshot(
-          _validSnapshot(inspirations: [
-            _inspiration(1, '新数据', 3000),
-          ]),
+          _validSnapshot(inspirations: [_inspiration(1, '新数据', 3000)]),
           download!.publishState,
         ),
         throwsA(
@@ -406,8 +437,9 @@ void main() {
         ),
       );
       // 旧指针仍然指向 a，远端不会读到一个未发布的槽位。
-      final pointer = jsonDecode(dav.files['flashnote_sync.pointer.json']!.text)
-          as Map<String, dynamic>;
+      final pointer =
+          jsonDecode(dav.files['flashnote_sync_v7.pointer.json']!.text)
+              as Map<String, dynamic>;
       expect(pointer['slot'], 'a');
     });
   });
@@ -417,6 +449,8 @@ WebDavClient _client(
   _FakeDav dav, {
   Duration requestTimeout = const Duration(seconds: 5),
   int maxDownloadBytes = WebDavClient.defaultMaxDownloadBytes,
+  String snapshotFileName = WebDavClient.defaultSnapshotFileName,
+  String? legacySnapshotFileName = WebDavClient.defaultLegacySnapshotFileName,
 }) {
   final dio = Dio();
   dio.httpClientAdapter = dav;
@@ -424,6 +458,8 @@ WebDavClient _client(
     serverUrl: 'https://dav.example.com/dav',
     username: 'user',
     password: 'pass',
+    snapshotFileName: snapshotFileName,
+    legacySnapshotFileName: legacySnapshotFileName,
     dio: dio,
     requestTimeout: requestTimeout,
     maxDownloadBytes: maxDownloadBytes,
@@ -495,32 +531,33 @@ class _FakeDav implements HttpClientAdapter {
   bool legacyChunked = false;
   Duration? delay;
 
-  void seedLegacy(String body, {required String etag, String? lastModified}) {
-    files['flashnote_sync.json'] = _Item(
-      utf8.encode(body),
-      etag: etag,
-    );
+  void seedSnapshot(String body, {required String etag, String? lastModified}) {
+    files['flashnote_sync_v7.json'] = _Item(utf8.encode(body), etag: etag);
     if (lastModified != null) {
-      _lastModified['flashnote_sync.json'] = lastModified;
+      _lastModified['flashnote_sync_v7.json'] = lastModified;
     }
   }
 
+  void seedOldFile(String body, {required String etag}) {
+    files['flashnote_sync.json'] = _Item(utf8.encode(body), etag: etag);
+  }
+
   void seedPointer({required String slot, required int size}) {
-    files['flashnote_sync.pointer.json'] = _Item(
+    files['flashnote_sync_v7.pointer.json'] = _Item(
       utf8.encode(jsonEncode({'slot': slot, 'size': size})),
       etag: '"ptr1"',
     );
   }
 
   void seedPointerRaw(Map<String, dynamic> pointer) {
-    files['flashnote_sync.pointer.json'] = _Item(
+    files['flashnote_sync_v7.pointer.json'] = _Item(
       utf8.encode(jsonEncode(pointer)),
       etag: '"ptr1"',
     );
   }
 
   void seedSlot(String slot, List<int> bytes) {
-    files['flashnote_sync.$slot.json'] = _Item(bytes, etag: '"slot-$slot"');
+    files['flashnote_sync_v7.$slot.json'] = _Item(bytes, etag: '"slot-$slot"');
   }
 
   final Map<String, String> _lastModified = {};
@@ -577,7 +614,7 @@ class _FakeDav implements HttpClientAdapter {
         files.remove(name);
         return _text('', 204);
       case 'GET':
-        if (name == 'flashnote_sync.json') {
+        if (name == 'flashnote_sync_v7.json') {
           if (legacyChunked) {
             final chunk = Uint8List.fromList(List.filled(10, 0x41));
             return ResponseBody(Stream.fromIterable([chunk, chunk]), 200);
@@ -613,7 +650,7 @@ class _FakeDav implements HttpClientAdapter {
         if (ifMatch != null && (existing == null || existing.etag != ifMatch)) {
           return _text('', 412);
         }
-        if (failPointerPut && name == 'flashnote_sync.pointer.json') {
+        if (failPointerPut && name == 'flashnote_sync_v7.pointer.json') {
           return _text('', 412);
         }
         final stored = truncateTempOnPut && name.endsWith('.tmp')
@@ -622,7 +659,7 @@ class _FakeDav implements HttpClientAdapter {
         final item = _Item(stored, etag: '"v${++_etagSeq}"');
         files[name] = item;
         if (simulateDestinationRace && name.endsWith('.tmp')) {
-          files['flashnote_sync.json'] = _Item(
+          files['flashnote_sync_v7.json'] = _Item(
             utf8.encode(jsonEncode(_otherDeviceSnapshot())),
             etag: '"other"',
           );
@@ -651,7 +688,5 @@ class _FakeDav implements HttpClientAdapter {
 }
 
 Map<String, dynamic> _otherDeviceSnapshot() {
-  return _validSnapshot(
-    inspirations: [_inspiration(9001, '其他设备的灵感', 3000)],
-  );
+  return _validSnapshot(inspirations: [_inspiration(9001, '其他设备的灵感', 3000)]);
 }

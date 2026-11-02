@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flashnote/data/datasources/local/ai_settings_storage.dart';
 import 'package:flashnote/data/datasources/local/app_database.dart';
+import 'package:flashnote/data/datasources/local/entity_uuids.dart';
 import 'package:flashnote/data/datasources/local/webdav_storage.dart';
 import 'package:flashnote/data/services/webdav_sync_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,45 +11,80 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  group('WebDavSyncService merge', () {
-    Map<String, dynamic> snapshot({
-      List<Map<String, dynamic>> inspirations = const [],
-      List<Map<String, dynamic>> inspirationLinks = const [],
-      List<Map<String, dynamic>> deletedRecords = const [],
-    }) {
-      return {
-        'version': 4,
-        'exportedAt': '2026-05-16T00:00:00.000',
-        'inspirations': inspirations,
-        'projects': <Map<String, dynamic>>[],
-        'tasks': <Map<String, dynamic>>[],
-        'customSources': <Map<String, dynamic>>[],
-        'attachments': <Map<String, dynamic>>[],
-        'chatMessages': <Map<String, dynamic>>[],
-        'inspirationLinks': inspirationLinks,
-        'clusters': <Map<String, dynamic>>[],
-        'deletedRecords': deletedRecords,
-        'aiSettings': <String, dynamic>{},
-      };
-    }
+  Map<String, dynamic> snapshot({
+    String deviceId = 'device-a',
+    List<Map<String, dynamic>> inspirations = const [],
+    List<Map<String, dynamic>> inspirationLinks = const [],
+    List<Map<String, dynamic>> deletedRecords = const [],
+  }) {
+    return {
+      'version': 7,
+      'deviceId': deviceId,
+      'exportedAt': '2026-05-16T00:00:00.000',
+      'inspirations': inspirations,
+      'projects': <Map<String, dynamic>>[],
+      'tasks': <Map<String, dynamic>>[],
+      'customSources': <Map<String, dynamic>>[],
+      'attachments': <Map<String, dynamic>>[],
+      'chatMessages': <Map<String, dynamic>>[],
+      'inspirationLinks': inspirationLinks,
+      'clusters': <Map<String, dynamic>>[],
+      'deletedRecords': deletedRecords,
+      'aiSettings': <String, dynamic>{},
+    };
+  }
 
-    test('本地删除墓碑会阻止远端旧灵感恢复', () {
+  Map<String, dynamic> legacyInspiration({
+    required int legacyId,
+    required String content,
+    required int createdAt,
+    required int updatedAt,
+  }) {
+    return {
+      'uuid': legacyRecordUuid('inspirations', legacyId, createdAt),
+      'legacyId': legacyId,
+      'content': content,
+      'createdAt': createdAt,
+      'updatedAt': updatedAt,
+      'isPinned': false,
+    };
+  }
+
+  group('WebDavSyncService merge', () {
+    test('旧墓碑（legacyId）会阻止远端旧灵感恢复', () {
       final merged = WebDavSyncService.mergeSnapshotsForTesting(
         snapshot(
           deletedRecords: [
-            {'entityType': 'inspirations', 'entityId': 1, 'deletedAt': 2000},
+            {
+              'entityType': 'inspirations',
+              'entityUuid': legacyTombstoneUuid('inspirations', 1),
+              'deletedAt': 2000,
+              'legacy': true,
+              'entityId': 1,
+            },
           ],
         ),
         snapshot(
           inspirations: [
-            {'id': 1, 'content': '远端旧灵感', 'createdAt': 1000, 'updatedAt': 1500},
+            legacyInspiration(
+              legacyId: 1,
+              content: '远端旧灵感',
+              createdAt: 1000,
+              updatedAt: 1500,
+            ),
           ],
         ),
       );
 
       expect(merged['inspirations'], isEmpty);
       expect(merged['deletedRecords'], [
-        {'entityType': 'inspirations', 'entityId': 1, 'deletedAt': 2000},
+        {
+          'entityType': 'inspirations',
+          'entityUuid': legacyTombstoneUuid('inspirations', 1),
+          'deletedAt': 2000,
+          'legacy': true,
+          'entityId': 1,
+        },
       ]);
     });
 
@@ -56,44 +92,69 @@ void main() {
       final merged = WebDavSyncService.mergeSnapshotsForTesting(
         snapshot(
           deletedRecords: [
-            {'entityType': 'inspirations', 'entityId': 1, 'deletedAt': 2000},
+            {
+              'entityType': 'inspirations',
+              'entityUuid': legacyTombstoneUuid('inspirations', 1),
+              'deletedAt': 2000,
+              'legacy': true,
+              'entityId': 1,
+            },
           ],
         ),
         snapshot(
           inspirations: [
-            {
-              'id': 1,
-              'content': '删除后更新的远端灵感',
-              'createdAt': 1000,
-              'updatedAt': 3000,
-            },
+            legacyInspiration(
+              legacyId: 1,
+              content: '删除后更新的远端灵感',
+              createdAt: 1000,
+              updatedAt: 3000,
+            ),
           ],
         ),
       );
 
-      final inspirations =
-          (merged['inspirations'] as List).cast<Map<String, dynamic>>();
+      final inspirations = (merged['inspirations'] as List)
+          .cast<Map<String, dynamic>>();
       expect(inspirations, hasLength(1));
       expect(inspirations.single['content'], '删除后更新的远端灵感');
     });
 
     test('无 updatedAt 的关系记录使用 createdAt 与删除墓碑比较', () {
+      final sourceUuid = legacyRecordUuid('inspirations', 1, 1000);
+      final targetUuid = legacyRecordUuid('inspirations', 2, 1000);
       final merged = WebDavSyncService.mergeSnapshotsForTesting(
         snapshot(
           deletedRecords: [
             {
               'entityType': 'inspirationLinks',
-              'entityId': 10,
+              'entityUuid': legacyTombstoneUuid('inspirationLinks', 10),
               'deletedAt': 2000,
+              'legacy': true,
+              'entityId': 10,
             },
           ],
         ),
         snapshot(
+          inspirations: [
+            legacyInspiration(
+              legacyId: 1,
+              content: 'A',
+              createdAt: 1000,
+              updatedAt: 1000,
+            ),
+            legacyInspiration(
+              legacyId: 2,
+              content: 'B',
+              createdAt: 1000,
+              updatedAt: 1000,
+            ),
+          ],
           inspirationLinks: [
             {
-              'id': 10,
-              'sourceId': 1,
-              'targetId': 2,
+              'uuid': legacyRecordUuid('inspirationLinks', 10, 1500),
+              'legacyId': 10,
+              'sourceUuid': sourceUuid,
+              'targetUuid': targetUuid,
               'linkType': 'similar',
               'confidence': 0.8,
               'isAutoGenerated': false,
@@ -104,24 +165,45 @@ void main() {
       );
 
       expect(merged['inspirationLinks'], isEmpty);
+      expect(merged['inspirations'] as List, hasLength(2));
     });
 
-    test('同一记录的删除墓碑合并时保留最新 deletedAt', () {
+    test('同一 uuid 的删除墓碑合并时保留最新 deletedAt', () {
+      final tombstoneUuid = legacyTombstoneUuid('tasks', 7);
       final merged = WebDavSyncService.mergeSnapshotsForTesting(
         snapshot(
           deletedRecords: [
-            {'entityType': 'tasks', 'entityId': 7, 'deletedAt': 2000},
+            {
+              'entityType': 'tasks',
+              'entityUuid': tombstoneUuid,
+              'deletedAt': 2000,
+              'legacy': true,
+              'entityId': 7,
+            },
           ],
         ),
         snapshot(
+          deviceId: 'device-b',
           deletedRecords: [
-            {'entityType': 'tasks', 'entityId': 7, 'deletedAt': 3000},
+            {
+              'entityType': 'tasks',
+              'entityUuid': tombstoneUuid,
+              'deletedAt': 3000,
+              'legacy': true,
+              'entityId': 7,
+            },
           ],
         ),
       );
 
       expect(merged['deletedRecords'], [
-        {'entityType': 'tasks', 'entityId': 7, 'deletedAt': 3000},
+        {
+          'entityType': 'tasks',
+          'entityUuid': tombstoneUuid,
+          'deletedAt': 3000,
+          'legacy': true,
+          'entityId': 7,
+        },
       ]);
     });
   });
@@ -131,7 +213,8 @@ void main() {
       List<Map<String, dynamic>> reports,
     ) {
       return {
-        'version': 5,
+        'version': 7,
+        'deviceId': 'device-a',
         'exportedAt': '2026-05-16T00:00:00.000',
         'inspirations': <Map<String, dynamic>>[],
         'projects': <Map<String, dynamic>>[],
@@ -151,7 +234,7 @@ void main() {
       final merged = WebDavSyncService.mergeSnapshotsForTesting(
         snapshotWithReports([
           {
-            'id': 1,
+            'uuid': deterministicReportUuid('weekly'),
             'type': 'weekly',
             'content': '本地周报',
             'model': 'm',
@@ -161,7 +244,7 @@ void main() {
         ]),
         snapshotWithReports([
           {
-            'id': 2,
+            'uuid': deterministicReportUuid('monthly'),
             'type': 'monthly',
             'content': '远端月报',
             'model': 'm',
@@ -171,10 +254,9 @@ void main() {
         ]),
       );
 
-      final reports =
-          (merged['reports'] as List).cast<Map<String, dynamic>>();
+      final reports = (merged['reports'] as List).cast<Map<String, dynamic>>();
       expect(reports, hasLength(2));
-      expect(reports.map((r) => r['id']), containsAll([1, 2]));
+      expect(reports.map((r) => r['type']), containsAll(['weekly', 'monthly']));
     });
   });
 
@@ -201,14 +283,12 @@ void main() {
 
       final aiSettings = stripped['aiSettings'] as Map<String, dynamic>;
       expect(aiSettings.containsKey('apiKeys'), isFalse);
-      final interfaces =
-          aiSettings['interfaces'] as Map<String, dynamic>;
+      final interfaces = aiSettings['interfaces'] as Map<String, dynamic>;
       final openAi = interfaces['openai_compatible'] as Map<String, dynamic>;
       expect(openAi.containsKey('apiKey'), isFalse);
       expect(openAi['baseUrl'], 'https://api.example.com/v1');
 
-      final webdavSettings =
-          stripped['webdavSettings'] as Map<String, dynamic>;
+      final webdavSettings = stripped['webdavSettings'] as Map<String, dynamic>;
       expect(webdavSettings.containsKey('password'), isFalse);
       expect(webdavSettings['username'], 'user');
     });
@@ -278,28 +358,32 @@ void main() {
     });
 
     test('写库失败时事务回滚，本地数据保持不变', () async {
-      final duplicateIds = emptySnapshot(
-        inspirations: [
+      const duplicateUuid = '00000000-0000-4000-8000-000000000001';
+      final duplicateUuids = {
+        ...emptySnapshot(),
+        'version': 7,
+        'deviceId': 'device-test',
+        'inspirations': [
           {
-            'id': 1,
+            'uuid': duplicateUuid,
             'content': 'A',
             'createdAt': 1,
             'updatedAt': 1,
             'isPinned': false,
           },
           {
-            'id': 1,
+            'uuid': duplicateUuid,
             'content': 'B',
             'createdAt': 2,
             'updatedAt': 2,
             'isPinned': false,
           },
         ],
-      );
+      };
 
       await expectLater(
-        service.importSnapshotForTesting(duplicateIds),
-        throwsA(anything),
+        service.importSnapshotForTesting(duplicateUuids),
+        throwsFormatException,
       );
 
       final rows = await db.getAllInspirations();

@@ -1,7 +1,9 @@
 import 'dart:convert';
 
-/// 快照导入 / 恢复支持的最高版本号。
-const int kMaxSnapshotVersion = 6;
+import 'package:uuid/uuid.dart';
+
+/// 快照格式版本。WebDAV 同步与文件导出共用同一个版本号，也是支持的最高版本。
+const int kSnapshotVersion = 7;
 
 /// 在触碰本地数据库或附件文件之前，完整校验快照结构。
 ///
@@ -10,10 +12,264 @@ const int kMaxSnapshotVersion = 6;
 void validateSnapshot(Map<String, dynamic> data) {
   final versionValue = data['version'];
   final version = versionValue == null ? 1 : _asInt(versionValue, 'version');
-  if (version < 1 || version > kMaxSnapshotVersion) {
+  if (version < 1 || version > kSnapshotVersion) {
     throw FormatException('不支持的数据版本: $version');
   }
 
+  if (version >= 7) {
+    _validateV7(data);
+    return;
+  }
+
+  _validateLegacy(data, version);
+}
+
+/// v7：uuid 身份 + uuid 关系。
+void _validateV7(Map<String, dynamic> data) {
+  final deviceId = data['deviceId'];
+  if (deviceId != null && deviceId is! String) {
+    throw const FormatException('deviceId 字段格式错误');
+  }
+
+  final inspirationUuids = _validateUuidList(
+    data,
+    'inspirations',
+    validate: (item) {
+      _requireString(item, 'content', 'inspirations');
+      _requireInt(item, 'createdAt', 'inspirations');
+      _requireInt(item, 'updatedAt', 'inspirations');
+      _requireBool(item, 'isPinned', 'inspirations');
+      _optionalString(item, 'source', 'inspirations');
+      _optionalString(item, 'aiAnalysis', 'inspirations');
+      _optionalString(item, 'mindMapData', 'inspirations');
+      _optionalInt(item, 'reviewedAt', 'inspirations');
+      _optionalBool(item, 'needsFollowUp', 'inspirations');
+      _validateTags(item, 'inspirations');
+    },
+  );
+
+  final projectUuids = _validateUuidList(
+    data,
+    'projects',
+    validate: (item) {
+      _requireString(item, 'title', 'projects');
+      _requireInt(item, 'createdAt', 'projects');
+      _requireInt(item, 'updatedAt', 'projects');
+      _optionalString(item, 'inspirationUuid', 'projects');
+      _optionalString(item, 'description', 'projects');
+      _optionalInt(item, 'progress', 'projects');
+      _optionalString(item, 'status', 'projects');
+      _optionalBool(item, 'isPinned', 'projects');
+      final target = item['inspirationUuid'];
+      if (target is String && !inspirationUuids.contains(target)) {
+        throw FormatException('projects.inspirationUuid 指向不存在的 uuid: $target');
+      }
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'tasks',
+    validate: (item) {
+      _requireString(item, 'projectUuid', 'tasks');
+      _requireString(item, 'title', 'tasks');
+      _requireInt(item, 'createdAt', 'tasks');
+      _requireInt(item, 'updatedAt', 'tasks');
+      _optionalBool(item, 'isCompleted', 'tasks');
+      _optionalBool(item, 'isPinned', 'tasks');
+      final target = item['projectUuid'] as String;
+      if (!projectUuids.contains(target)) {
+        throw FormatException('tasks.projectUuid 指向不存在的 uuid: $target');
+      }
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'customSources',
+    validate: (item) {
+      _requireString(item, 'name', 'customSources');
+      _requireString(item, 'icon', 'customSources');
+      _requireInt(item, 'createdAt', 'customSources');
+      _optionalInt(item, 'sortOrder', 'customSources');
+      _optionalBool(item, 'isBuiltIn', 'customSources');
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'attachments',
+    validate: (item) {
+      final ownerType = item['ownerType'];
+      if (ownerType != 'inspiration' && ownerType != 'project') {
+        throw const FormatException('attachments.ownerType 字段格式错误');
+      }
+      _requireString(item, 'ownerUuid', 'attachments');
+      _requireString(item, 'fileName', 'attachments');
+      _requireString(item, 'mimeType', 'attachments');
+      _requireInt(item, 'createdAt', 'attachments');
+      _optionalInt(item, 'size', 'attachments');
+      _optionalString(item, 'filePath', 'attachments');
+      final contentBase64 = item['contentBase64'];
+      if (contentBase64 != null) {
+        if (contentBase64 is! String) {
+          throw const FormatException('attachments.contentBase64 字段格式错误');
+        }
+        if (contentBase64.isNotEmpty) {
+          try {
+            base64Decode(contentBase64);
+          } on FormatException {
+            throw const FormatException(
+              'attachments.contentBase64 不是合法的 Base64 数据',
+            );
+          }
+        }
+      }
+      final target = item['ownerUuid'] as String;
+      final ownerExists = ownerType == 'project'
+          ? projectUuids.contains(target)
+          : inspirationUuids.contains(target);
+      if (!ownerExists) {
+        throw FormatException('attachments.ownerUuid 指向不存在的 uuid: $target');
+      }
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'chatMessages',
+    validate: (item) {
+      _requireString(item, 'inspirationUuid', 'chatMessages');
+      _requireString(item, 'role', 'chatMessages');
+      _requireString(item, 'content', 'chatMessages');
+      _requireInt(item, 'createdAt', 'chatMessages');
+      final target = item['inspirationUuid'] as String;
+      if (!inspirationUuids.contains(target)) {
+        throw FormatException(
+          'chatMessages.inspirationUuid 指向不存在的 uuid: $target',
+        );
+      }
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'inspirationLinks',
+    validate: (item) {
+      _requireString(item, 'sourceUuid', 'inspirationLinks');
+      _requireString(item, 'targetUuid', 'inspirationLinks');
+      _requireString(item, 'linkType', 'inspirationLinks');
+      _optionalString(item, 'relationLabel', 'inspirationLinks');
+      final confidence = item['confidence'];
+      if (confidence != null && confidence is! num) {
+        throw const FormatException('inspirationLinks.confidence 字段格式错误');
+      }
+      _optionalBool(item, 'isAutoGenerated', 'inspirationLinks');
+      _requireInt(item, 'createdAt', 'inspirationLinks');
+      final source = item['sourceUuid'] as String;
+      final target = item['targetUuid'] as String;
+      if (!inspirationUuids.contains(source) ||
+          !inspirationUuids.contains(target)) {
+        throw FormatException(
+          'inspirationLinks 关系指向不存在的 uuid: $source -> $target',
+        );
+      }
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'clusters',
+    validate: (item) {
+      _requireString(item, 'name', 'clusters');
+      _optionalString(item, 'description', 'clusters');
+      _requireInt(item, 'createdAt', 'clusters');
+      _requireInt(item, 'updatedAt', 'clusters');
+    },
+  );
+
+  _validateUuidList(
+    data,
+    'reports',
+    validate: (item) {
+      _requireString(item, 'type', 'reports');
+      _requireString(item, 'content', 'reports');
+      _optionalString(item, 'model', 'reports');
+      _requireInt(item, 'createdAt', 'reports');
+      _requireInt(item, 'updatedAt', 'reports');
+    },
+  );
+
+  _forEachItem(data, 'deletedRecords', (item) {
+    final entityType = item['entityType'];
+    if (entityType is! String || !_entityTypes.contains(entityType)) {
+      throw const FormatException('deletedRecords.entityType 字段格式错误');
+    }
+    final entityUuid = item['entityUuid'];
+    if (entityUuid is! String || !_isUuid(entityUuid)) {
+      throw const FormatException('deletedRecords.entityUuid 字段格式错误');
+    }
+    _requireInt(item, 'deletedAt', 'deletedRecords');
+    _optionalBool(item, 'legacy', 'deletedRecords');
+    _optionalInt(item, 'entityId', 'deletedRecords');
+  });
+
+  _validateAiSettings(data['aiSettings']);
+  _validateWebDavSettings(data['webdavSettings']);
+  _validateGraphLayouts(data['graphLayouts']);
+}
+
+const List<String> _entityTypes = [
+  'inspirations',
+  'projects',
+  'tasks',
+  'attachments',
+  'reports',
+  'inspirationLinks',
+  'clusters',
+  'customSources',
+  'chatMessages',
+];
+
+Set<String> _validateUuidList(
+  Map<String, dynamic> data,
+  String key, {
+  required void Function(Map<String, dynamic> item) validate,
+}) {
+  final seen = <String>{};
+  _forEachItem(data, key, (item) {
+    final uuid = item['uuid'];
+    if (uuid is! String || uuid.isEmpty) {
+      throw FormatException('$key.uuid 字段缺失或格式错误');
+    }
+    if (!_isUuid(uuid)) {
+      throw FormatException('$key.uuid 不是合法 UUID: $uuid');
+    }
+    if (!seen.add(uuid)) {
+      throw FormatException('$key 存在重复 uuid: $uuid');
+    }
+    final legacyId = item['legacyId'];
+    if (legacyId != null && legacyId is! int) {
+      throw FormatException('$key.legacyId 字段格式错误');
+    }
+    validate(item);
+  });
+  return seen;
+}
+
+void _validateTags(Map<String, dynamic> item, String context) {
+  final tags = item['tags'];
+  if (tags != null && tags is! List && tags is! String) {
+    throw FormatException('$context.tags 字段格式错误');
+  }
+}
+
+bool _isUuid(String value) {
+  return Uuid.isValidUUID(fromString: value);
+}
+
+/// v1-v6：沿用旧结构校验，允许旧快照先校验再升级。
+void _validateLegacy(Map<String, dynamic> data, int version) {
   _forEachItem(data, 'inspirations', required: true, (item) {
     _requireInt(item, 'id', 'inspirations');
     _requireString(item, 'content', 'inspirations');
@@ -25,10 +281,7 @@ void validateSnapshot(Map<String, dynamic> data) {
     _optionalString(item, 'mindMapData', 'inspirations');
     _optionalInt(item, 'reviewedAt', 'inspirations');
     _optionalBool(item, 'needsFollowUp', 'inspirations');
-    final tags = item['tags'];
-    if (tags != null && tags is! List && tags is! String) {
-      throw const FormatException('inspirations.tags 字段格式错误');
-    }
+    _validateTags(item, 'inspirations');
   });
 
   _forEachItem(data, 'projects', required: true, (item) {
@@ -81,7 +334,9 @@ void validateSnapshot(Map<String, dynamic> data) {
           try {
             base64Decode(contentBase64);
           } on FormatException {
-            throw const FormatException('attachments.contentBase64 不是合法的 Base64 数据');
+            throw const FormatException(
+              'attachments.contentBase64 不是合法的 Base64 数据',
+            );
           }
         }
       }
@@ -181,11 +436,7 @@ int _requireInt(Map<String, dynamic> item, String field, String context) {
   return value;
 }
 
-void _requireString(
-  Map<String, dynamic> item,
-  String field,
-  String context,
-) {
+void _requireString(Map<String, dynamic> item, String field, String context) {
   if (item[field] is! String) throw FormatException('$context.$field 字段格式错误');
 }
 
@@ -193,11 +444,7 @@ void _requireBool(Map<String, dynamic> item, String field, String context) {
   if (item[field] is! bool) throw FormatException('$context.$field 字段格式错误');
 }
 
-void _optionalString(
-  Map<String, dynamic> item,
-  String field,
-  String context,
-) {
+void _optionalString(Map<String, dynamic> item, String field, String context) {
   final value = item[field];
   if (value != null && value is! String) {
     throw FormatException('$context.$field 字段格式错误');

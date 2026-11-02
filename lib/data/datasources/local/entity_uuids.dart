@@ -33,3 +33,13 @@ String deterministicBuiltInSourceUuid(String name, {Object? discriminator}) {
 String legacyTombstoneUuid(String entityType, int entityId) {
   return _uuid.v5(flashNoteUuidNamespace, 'legacy-tomb:$entityType:$entityId');
 }
+
+/// 由旧快照（v1-v6）转换出来的记录使用的确定性 UUID。
+///
+/// 加入 createdAt 是为了避免两台设备上同为 id=1 但实际不同的记录被合并。
+String legacyRecordUuid(String entityType, int legacyId, int createdAt) {
+  return _uuid.v5(
+    flashNoteUuidNamespace,
+    'legacy:$entityType:$legacyId:$createdAt',
+  );
+}
