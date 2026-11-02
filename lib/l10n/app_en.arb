@@ -126,6 +126,7 @@
   "importSuccess": "Import successful",
   "importSuccessAiUpdated": "Import successful. AI settings updated. Please go back to Settings to view.",
   "importFailed": "Import failed",
+  "credentialsNotIncluded": "Imported/synced data does not include API keys or the WebDAV password. Please re-enter them on this device.",
   "importConfirm": "Import will overwrite existing data. Continue?",
   "sourceManagement": "Source Management",
   "addSource": "Add Source",

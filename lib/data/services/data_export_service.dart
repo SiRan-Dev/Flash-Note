@@ -6,15 +6,23 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flashnote/data/datasources/local/ai_settings_storage.dart';
 import 'package:flashnote/data/datasources/local/app_database.dart';
 import 'package:flashnote/data/datasources/local/webdav_storage.dart';
+import 'package:flashnote/data/services/snapshot_validator.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ImportResult {
-  const ImportResult({required this.success, this.aiSettingsChanged = false});
+  const ImportResult({
+    required this.success,
+    this.aiSettingsChanged = false,
+    this.credentialsRequired = false,
+  });
 
   final bool success;
   final bool aiSettingsChanged;
+
+  /// 导入的数据不含 API Key / WebDAV 密码，需要用户重新填写。
+  final bool credentialsRequired;
 }
 
 class DataExportService {
@@ -40,21 +48,16 @@ class DataExportService {
   }
 
   Future<Map<String, dynamic>> _exportAiSettings() async {
-    final openAiKey = await _aiStorage.getApiKey('openai_compatible');
-    final anthropicKey = await _aiStorage.getApiKey('anthropic_compatible');
     return {
       'selectedInterfaceId': _aiStorage.selectedPresetId,
       'interfaces': {
         'openai_compatible': {
           'baseUrl': _aiStorage.baseUrlForInterface('openai_compatible'),
           'model': _aiStorage.modelForInterface('openai_compatible'),
-          if (openAiKey != null && openAiKey.isNotEmpty) 'apiKey': openAiKey,
         },
         'anthropic_compatible': {
           'baseUrl': _aiStorage.baseUrlForInterface('anthropic_compatible'),
           'model': _aiStorage.modelForInterface('anthropic_compatible'),
-          if (anthropicKey != null && anthropicKey.isNotEmpty)
-            'apiKey': anthropicKey,
         },
       },
     };
@@ -101,12 +104,35 @@ class DataExportService {
     return restoredPath;
   }
 
-  Future<void> _deleteAttachmentFile(String filePath) async {
-    if (filePath.isEmpty) return;
-    final file = File(filePath);
-    if (await file.exists()) {
-      await file.delete();
+  /// 导入文件不含凭据时提示用户重新填写。
+  bool _needsCredentials({
+    required Map<String, dynamic>? aiSettings,
+    required Map<String, dynamic>? webdavSettings,
+  }) {
+    if (aiSettings != null && !_containsApiKey(aiSettings)) return true;
+    if (webdavSettings != null) {
+      final password = webdavSettings['password'];
+      if (password is! String || password.isEmpty) return true;
     }
+    return false;
+  }
+
+  bool _containsApiKey(Map<String, dynamic> settings) {
+    final apiKeys = settings['apiKeys'];
+    if (apiKeys is Map &&
+        apiKeys.values.any((value) => value is String && value.isNotEmpty)) {
+      return true;
+    }
+    final interfaces = settings['interfaces'];
+    if (interfaces is Map) {
+      for (final value in interfaces.values) {
+        if (value is Map) {
+          final apiKey = value['apiKey'];
+          if (apiKey is String && apiKey.isNotEmpty) return true;
+        }
+      }
+    }
+    return false;
   }
 
   Future<bool> _importAiSettings(Map<String, dynamic> settings) async {
@@ -168,7 +194,6 @@ class DataExportService {
       'syncAttachments': _webdavStorage.syncAttachments,
       'lastSyncTime': _webdavStorage.lastSyncTime,
       'username': await _webdavStorage.username,
-      'password': await _webdavStorage.password,
     };
   }
 
@@ -417,13 +442,49 @@ class DataExportService {
       return const ImportResult(success: false);
     }
     final jsonStr = await File(path).readAsString();
-    final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+    final decoded = jsonDecode(jsonStr);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('导入文件格式不正确');
+    }
+    final data = decoded;
 
+    // Validate the whole file before touching any local data.
+    validateSnapshot(data);
     final version = data['version'] as int? ?? 1;
-    if (version < 1 || version > 6) {
-      return const ImportResult(success: false);
+
+    // All row replacement happens in a single transaction: if anything fails,
+    // every delete/insert is rolled back. Attachment files are never deleted.
+    await _db.transaction(() => _replaceLocalData(data, version));
+
+    // Import AI settings only after the database transaction has committed.
+    final aiSettings = data['aiSettings'] as Map<String, dynamic>?;
+    var aiSettingsChanged = false;
+    if (aiSettings != null) {
+      aiSettingsChanged = await _importAiSettings(aiSettings);
     }
 
+    final webdavSettings = data['webdavSettings'] as Map<String, dynamic>?;
+    if (webdavSettings != null) {
+      await _importWebDavSettings(webdavSettings);
+    }
+
+    await _importGraphLayouts(data['graphLayouts'] as Map<String, dynamic>?);
+
+    return ImportResult(
+      success: true,
+      aiSettingsChanged: aiSettingsChanged,
+      credentialsRequired: _needsCredentials(
+        aiSettings: aiSettings,
+        webdavSettings: webdavSettings,
+      ),
+    );
+  }
+
+  /// Replaces all local rows inside the caller's transaction.
+  Future<void> _replaceLocalData(
+    Map<String, dynamic> data,
+    int version,
+  ) async {
     // Clear all existing data
     for (final i in await _db.getAllInspirations()) {
       await _db.deleteChatMessagesByInspirationId(i.id);
@@ -449,10 +510,10 @@ class DataExportService {
       await _db.deleteInspiration(i.id);
     }
     await _db.deleteAllSources();
-    // Clear attachments
+    // Clear attachment rows, but keep the files on disk so a failed import
+    // can never destroy locally stored attachments.
     final existingAttachments = await _db.getAllAttachments();
     for (final a in existingAttachments) {
-      await _deleteAttachmentFile(a.filePath);
       await _db.deleteAttachment(a.id);
     }
     await _db.deleteAllDeletedRecords();
@@ -646,21 +707,5 @@ class DataExportService {
         );
       }
     }
-
-    // Import AI settings
-    final aiSettings = data['aiSettings'] as Map<String, dynamic>?;
-    var aiSettingsChanged = false;
-    if (aiSettings != null) {
-      aiSettingsChanged = await _importAiSettings(aiSettings);
-    }
-
-    final webdavSettings = data['webdavSettings'] as Map<String, dynamic>?;
-    if (webdavSettings != null) {
-      await _importWebDavSettings(webdavSettings);
-    }
-
-    await _importGraphLayouts(data['graphLayouts'] as Map<String, dynamic>?);
-
-    return ImportResult(success: true, aiSettingsChanged: aiSettingsChanged);
   }
 }

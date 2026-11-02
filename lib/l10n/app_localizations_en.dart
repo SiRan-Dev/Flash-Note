@@ -393,6 +393,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get importFailed => 'Import failed';
 
   @override
+  String get credentialsNotIncluded =>
+      'Imported/synced data does not include API keys or the WebDAV password. Please re-enter them on this device.';
+
+  @override
   String get importConfirm => 'Import will overwrite existing data. Continue?';
 
   @override

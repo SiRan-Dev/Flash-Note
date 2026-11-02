@@ -126,6 +126,7 @@
   "importSuccess": "导入成功",
   "importSuccessAiUpdated": "导入成功，AI 配置已更新。请返回设置页面查看。",
   "importFailed": "导入失败",
+  "credentialsNotIncluded": "导入/同步的数据不包含 API Key 和 WebDAV 密码，请在本机重新填写。",
   "importConfirm": "导入将覆盖现有数据，确定继续吗？",
   "sourceManagement": "来源管理",
   "addSource": "添加来源",

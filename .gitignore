@@ -6,6 +6,9 @@
 *.swp
 *.iml
 
+# Application lockfile must be committed for reproducible builds
+!pubspec.lock
+
 # Generated Dart files (run `dart run build_runner build` to regenerate)
 *.g.dart
 *.freezed.dart

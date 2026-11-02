@@ -180,13 +180,15 @@ class _WebDavSettingsPageState extends ConsumerState<WebDavSettingsPage> {
           await _loadSettings();
 
           if (mounted) {
+            final syncMessage =
+                result.credentialsRequired
+                    ? '${l10n.syncSuccess}\n${l10n.credentialsNotIncluded}'
+                    : result.aiSettingsChanged
+                    ? l10n.syncCompletedRefresh
+                    : l10n.syncSuccess;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(
-                  result.aiSettingsChanged
-                      ? l10n.syncCompletedRefresh
-                      : l10n.syncSuccess,
-                ),
+                content: Text(syncMessage),
                 duration: const Duration(seconds: 3),
               ),
             );
