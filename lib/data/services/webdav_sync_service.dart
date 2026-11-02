@@ -17,12 +17,14 @@ class SyncResult {
     this.count,
     this.aiSettingsChanged = false,
     this.credentialsRequired = false,
+    this.publishMode,
   }) : isSuccess = true;
   const SyncResult.failure(this.message)
     : isSuccess = false,
       count = null,
       aiSettingsChanged = false,
-      credentialsRequired = false;
+      credentialsRequired = false,
+      publishMode = null;
 
   final bool isSuccess;
   final String message;
@@ -31,6 +33,9 @@ class SyncResult {
 
   /// 恢复的数据不含 API Key，需要用户在本机重新填写。
   final bool credentialsRequired;
+
+  /// 本次发布使用的模式（atomicMove / dualSlotPointer），失败时为 null。
+  final String? publishMode;
 }
 
 class WebDavSyncService {
@@ -570,32 +575,19 @@ class WebDavSyncService {
       final client = await _getClient();
       final localData = await _exportToJson();
 
-      WebDavVersion? expectedVersion;
-      var createOnly = false;
-      try {
-        final remoteVersion = await client.fetchVersion();
-        if (remoteVersion == null) {
-          createOnly = true;
-        } else {
-          expectedVersion = remoteVersion;
-        }
-      } on WebDavAuthException {
-        rethrow;
-      } on WebDavException catch (e) {
-        // 部分 WebDAV 服务不支持 HEAD：退回原有的强制覆盖行为。
-        if (e.statusCode != 405 && e.statusCode != 501) rethrow;
-      }
-
-      // Credentials never leave the device in sync files.
-      await client.uploadData(
+      // 先探测当前发布模式；服务器不支持 HEAD 时由客户端自行降级。
+      final state = await client.probePublishState();
+      final published = await client.publishSnapshot(
         _stripCredentials(localData),
-        expectedVersion: expectedVersion,
-        createOnly: createOnly,
+        state,
       );
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
-      return const SyncResult.success(message: '推送成功');
+      return SyncResult.success(
+        message: '推送成功（${published.mode.label}）',
+        publishMode: published.mode.name,
+      );
     } on WebDavConflictException {
       return const SyncResult.failure(
         '推送中止：远端已被其他设备修改，请重试（未写入远端）',
@@ -619,19 +611,22 @@ class WebDavSyncService {
       if (remote == null) {
         final localData = await _exportToJson();
         try {
-          await client.uploadData(
+          final published = await client.publishSnapshot(
             _stripCredentials(localData),
-            createOnly: true,
+            const WebDavPublishState.firstSync(),
+          );
+          await webdavStorage.setLastSyncTime(
+            DateTime.now().millisecondsSinceEpoch,
+          );
+          return SyncResult.success(
+            message: '首次同步，已推送本地数据（${published.mode.label}）',
+            publishMode: published.mode.name,
           );
         } on WebDavConflictException {
           return const SyncResult.failure(
             '首次同步中止：远端已被其他设备创建，请重试（未覆盖远端）',
           );
         }
-        await webdavStorage.setLastSyncTime(
-          DateTime.now().millisecondsSinceEpoch,
-        );
-        return const SyncResult.success(message: '首次同步，已推送本地数据');
       }
 
       // Get local data
@@ -640,28 +635,28 @@ class WebDavSyncService {
       // Merge
       final merged = _mergeData(localData, remote.data);
 
-      // Validate before uploading: never write a snapshot the local importer
+      // Validate before publishing: never write a snapshot the local importer
       // could not restore.
       validateSnapshot(merged);
 
-      // Conditional write: if another device changed the remote file after
-      // our download, the server returns 412 and we do not overwrite it.
-      await client.uploadData(
+      // 原子发布：临时对象/MOVE 或双槽位 + 指针，失败时旧版本保持完好。
+      final published = await client.publishSnapshot(
         _stripCredentials(merged),
-        expectedVersion: remote.version,
+        remote.publishState,
       );
 
-      // Apply the merged result locally only after the upload succeeded, so a
-      // failed upload never changes local data.
+      // Apply the merged result locally only after the publish succeeded, so a
+      // failed publish never changes local data.
       final aiSettingsChanged = await _importFromJson(merged);
 
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
       return SyncResult.success(
-        message: '合并同步成功',
+        message: '合并同步成功（${published.mode.label}）',
         aiSettingsChanged: aiSettingsChanged,
         credentialsRequired: await _needsAiKey(),
+        publishMode: published.mode.name,
       );
     } on WebDavConflictException {
       return const SyncResult.failure(

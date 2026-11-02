@@ -1,16 +1,39 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 
-/// 远端文件的版本信息，用于条件写入（If-Match / If-Unmodified-Since）。
+/// 快照发布模式。
+enum WebDavPublishMode {
+  /// 临时对象 + MOVE 原子替换正式文件。
+  atomicMove,
+
+  /// 服务器不支持 MOVE 时降级为双槽位 + 指针。
+  dualSlotPointer,
+}
+
+extension WebDavPublishModeLabel on WebDavPublishMode {
+  String get label {
+    switch (this) {
+      case WebDavPublishMode.atomicMove:
+        return '原子发布';
+      case WebDavPublishMode.dualSlotPointer:
+        return '双槽位降级';
+    }
+  }
+}
+
+/// 远端文件的版本信息，用于条件写入与写后校验。
 class WebDavVersion {
-  const WebDavVersion({this.etag, this.lastModified});
+  const WebDavVersion({this.etag, this.lastModified, this.contentLength});
 
   final String? etag;
   final String? lastModified;
+  final int? contentLength;
 
-  bool get isEmpty => etag == null && lastModified == null;
+  bool get isEmpty =>
+      etag == null && lastModified == null && contentLength == null;
 
   /// 弱 ETag（以 `W/` 开头）不能用于 If-Match（RFC 9110）。
   bool get hasStrongEtag {
@@ -21,12 +44,49 @@ class WebDavVersion {
   }
 }
 
-/// 下载结果：同步数据 + 远端版本。
+/// 发布前从远端读到的状态，用于判断下一次写入走哪条路径。
+class WebDavPublishState {
+  const WebDavPublishState({
+    required this.mode,
+    required this.version,
+    required this.remoteExists,
+    this.activeSlot,
+    this.revalidateDestination = true,
+  });
+
+  const WebDavPublishState.firstSync()
+    : mode = WebDavPublishMode.atomicMove,
+      version = const WebDavVersion(),
+      remoteExists = false,
+      activeSlot = null,
+      revalidateDestination = true;
+
+  final WebDavPublishMode mode;
+
+  /// atomicMove 模式是正式文件版本；双槽位模式是指针文件版本。
+  final WebDavVersion version;
+  final bool remoteExists;
+
+  /// 双槽位模式当前生效的槽位（a/b）。
+  final String? activeSlot;
+
+  /// 服务器不支持 HEAD 时无法做写入前复核，避免误判为首次同步。
+  final bool revalidateDestination;
+}
+
+/// 下载结果：同步数据 + 下一次发布所需的状态。
 class WebDavDownload {
-  const WebDavDownload({required this.data, required this.version});
+  const WebDavDownload({required this.data, required this.publishState});
 
   final Map<String, dynamic> data;
-  final WebDavVersion version;
+  final WebDavPublishState publishState;
+}
+
+/// 发布结果，供上层在同步结果里展示使用的模式。
+class WebDavPublishResult {
+  const WebDavPublishResult({required this.mode});
+
+  final WebDavPublishMode mode;
 }
 
 /// WebDAV 客户端异常基类。
@@ -81,8 +141,15 @@ class WebDavClient {
              ),
            );
 
-  /// 下载体积上限，默认 128 MiB。超过后中止并给出明确错误，避免 OOM。
+  /// 单个快照的下载/校验体积上限，默认 128 MiB。
   static const int defaultMaxDownloadBytes = 128 * 1024 * 1024;
+
+  /// 指针文件上限，正常只有几十字节。
+  static const int _maxPointerBytes = 4096;
+
+  static const String _legacyFileName = 'flashnote_sync.json';
+  static const String _pointerFileName = 'flashnote_sync.pointer.json';
+  static const List<String> _slotNames = ['a', 'b'];
 
   final String serverUrl;
   final String username;
@@ -101,9 +168,16 @@ class WebDavClient {
     return path.endsWith('/') ? path : '$path/';
   }
 
-  String get _fileUrl => '$_baseUrl${_fullPath}flashnote_sync.json';
+  String _urlFor(String fileName) => '$_baseUrl$_fullPath$fileName';
 
-  String get _directoryUrl => '$_baseUrl$_fullPath';
+  String get _legacyUrl => _urlFor(_legacyFileName);
+
+  String get _pointerUrl => _urlFor(_pointerFileName);
+
+  String _slotUrl(String slot) => _urlFor('flashnote_sync.$slot.json');
+
+  String _tempUrl() =>
+      _urlFor('flashnote_sync.${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}.tmp');
 
   Options get _authOptions => Options(
     headers: {
@@ -115,9 +189,9 @@ class WebDavClient {
   /// Test WebDAV connection by sending a PROPFIND request
   Future<(bool, String)> testConnection() async {
     try {
-      final response = await _runWithDeadline(
+      final response = await _send(
         (token) => _dio.request(
-          _directoryUrl,
+          _urlFor(''),
           cancelToken: token,
           options: _authOptions.copyWith(
             method: 'PROPFIND',
@@ -136,8 +210,6 @@ class WebDavClient {
       return (false, 'HTTP ${response.statusCode}');
     } on WebDavException catch (e) {
       return (false, e.message);
-    } on DioException catch (e) {
-      return (false, _mapDioException(e).message);
     }
   }
 
@@ -147,9 +219,9 @@ class WebDavClient {
   /// its body and can leave the remote state inconsistent.
   Future<void> ensureDirectory() async {
     try {
-      await _runWithDeadline(
+      await _send(
         (token) => _dio.request(
-          _directoryUrl,
+          _urlFor(''),
           cancelToken: token,
           options: _authOptions.copyWith(
             method: 'MKCOL',
@@ -159,21 +231,405 @@ class WebDavClient {
           ),
         ),
       );
-    } on DioException catch (e) {
+    } on WebDavException catch (e) {
       // 405 Method Not Allowed 表示目录已存在（RFC 4918）。
-      if (e.response?.statusCode == 405) return;
-      throw _mapDioException(e);
+      if (e.statusCode == 405) return;
+      rethrow;
     }
   }
 
-  /// 读取远端文件版本（HEAD）。返回 null 表示远端文件不存在。
-  ///
-  /// 服务器不支持 HEAD（405/501）时调用方可决定降级策略。
-  Future<WebDavVersion?> fetchVersion() async {
+  /// 读取旧式正式文件的版本（HEAD）。返回 null 表示文件不存在。
+  Future<WebDavVersion?> fetchVersion() => _head(_legacyUrl);
+
+  /// 轻量探测发布状态（不下载快照正文），用于“推送”。
+  Future<WebDavPublishState> probePublishState() async {
+    final pointer = await _readPointer(allowNotFound: true);
+    if (pointer != null) {
+      return WebDavPublishState(
+        mode: WebDavPublishMode.dualSlotPointer,
+        version: pointer.version,
+        remoteExists: true,
+        activeSlot: pointer.slot,
+      );
+    }
+
     try {
-      final response = await _runWithDeadline(
+      final version = await _head(_legacyUrl);
+      if (version == null) {
+        return const WebDavPublishState.firstSync();
+      }
+      return WebDavPublishState(
+        mode: WebDavPublishMode.atomicMove,
+        version: version,
+        remoteExists: true,
+      );
+    } on WebDavException catch (e) {
+      if (e.statusCode == 405 || e.statusCode == 501) {
+        // 服务器不支持 HEAD：保留旧行为，跳过写入前复核。
+        return const WebDavPublishState(
+          mode: WebDavPublishMode.atomicMove,
+          version: WebDavVersion(),
+          remoteExists: true,
+          revalidateDestination: false,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// 原子发布快照。
+  ///
+  /// 正常路径：PUT 到临时对象 → HEAD 校验长度/ETag → MOVE 覆盖正式文件。
+  /// MOVE 返回 405/501 时降级为双槽位 + 指针模式。
+  Future<WebDavPublishResult> publishSnapshot(
+    Map<String, dynamic> data,
+    WebDavPublishState state,
+  ) async {
+    await ensureDirectory();
+    final bytes = utf8.encode(const JsonEncoder.withIndent('  ').convert(data));
+
+    if (state.mode == WebDavPublishMode.dualSlotPointer) {
+      return await _publishToSlots(bytes, state);
+    }
+
+    try {
+      return await _publishWithMove(bytes, state);
+    } on WebDavException catch (e) {
+      if (e.statusCode == 405 || e.statusCode == 501) {
+        return await _publishToSlots(
+          bytes,
+          const WebDavPublishState(
+            mode: WebDavPublishMode.dualSlotPointer,
+            version: WebDavVersion(),
+            remoteExists: false,
+          ),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// 读取远端快照。
+  ///
+  /// 先读指针文件：存在则按指针读槽位；不存在则兼容读取旧文件名。
+  Future<WebDavDownload?> downloadData() async {
+    final pointer = await _readPointer(allowNotFound: true);
+    if (pointer == null) {
+      return await _downloadLegacy();
+    }
+
+    final slotDownload = await _downloadBytes(
+      _slotUrl(pointer.slot),
+      followRedirects: false,
+      label: '远端同步快照',
+    );
+    if (slotDownload == null || slotDownload.bytes.length != pointer.size) {
+      throw const WebDavException(
+        '远端同步指针指向的快照长度不一致，已中止（旧快照仍保留）',
+      );
+    }
+    final data = _requireSnapshot(
+      slotDownload.bytes,
+      label: '远端同步快照',
+    );
+
+    return WebDavDownload(
+      data: data,
+      publishState: WebDavPublishState(
+        mode: WebDavPublishMode.dualSlotPointer,
+        version: pointer.version,
+        remoteExists: true,
+        activeSlot: pointer.slot,
+      ),
+    );
+  }
+
+  Future<WebDavDownload?> _downloadLegacy() async {
+    final downloaded = await _downloadBytes(
+      _legacyUrl,
+      allowNotFound: true,
+    );
+    if (downloaded == null) return null;
+
+    return WebDavDownload(
+      data: _requireSnapshot(downloaded.bytes, label: '远端同步文件'),
+      publishState: WebDavPublishState(
+        mode: WebDavPublishMode.atomicMove,
+        version: downloaded.version,
+        remoteExists: true,
+      ),
+    );
+  }
+
+  Future<WebDavPublishResult> _publishWithMove(
+    List<int> bytes,
+    WebDavPublishState state,
+  ) async {
+    final tempUrl = _tempUrl();
+    try {
+      final putResponse = await _putBytes(tempUrl, bytes, createOnly: true);
+      final putVersion = _versionFrom(putResponse.headers);
+      final head = await _head(tempUrl);
+      _verifyWrittenObject(head, bytes.length, putVersion, '临时文件');
+
+      if (state.revalidateDestination) {
+        final current = await _head(_legacyUrl);
+        if (!_destinationUnchanged(current, state)) {
+          throw const WebDavConflictException('远端文件已被其他设备修改');
+        }
+      }
+    } on WebDavException {
+      await _deleteBestEffort(tempUrl);
+      rethrow;
+    }
+
+    try {
+      await _send(
         (token) => _dio.request(
-          _fileUrl,
+          tempUrl,
+          cancelToken: token,
+          options: _authOptions.copyWith(
+            method: 'MOVE',
+            headers: {
+              ..._authOptions.headers!,
+              'Destination': Uri.parse(_legacyUrl).toString(),
+              'Overwrite': 'T',
+            },
+            responseType: ResponseType.plain,
+            followRedirects: false,
+            receiveDataWhenStatusError: false,
+          ),
+        ),
+      );
+      return const WebDavPublishResult(mode: WebDavPublishMode.atomicMove);
+    } on WebDavException catch (e) {
+      if (e.statusCode == 405 || e.statusCode == 501) {
+        await _deleteBestEffort(tempUrl);
+        rethrow;
+      }
+      throw WebDavException(
+        '${e.message}；临时文件已保留：${_fileNameOf(tempUrl)}',
+        statusCode: e.statusCode,
+      );
+    }
+  }
+
+  Future<WebDavPublishResult> _publishToSlots(
+    List<int> bytes,
+    WebDavPublishState state,
+  ) async {
+    final activeSlot = state.activeSlot;
+    final targetSlot = activeSlot == null
+        ? 'a'
+        : (activeSlot == 'a' ? 'b' : 'a');
+
+    // 写入前复核指针没有在读取后被其他设备改走。
+    final before = await _readPointer(allowNotFound: true);
+    _ensurePointerUnchanged(before, state);
+
+    final slotUrl = _slotUrl(targetSlot);
+    try {
+      final putResponse = await _putBytes(slotUrl, bytes);
+      final putVersion = _versionFrom(putResponse.headers);
+      final head = await _head(slotUrl);
+      _verifyWrittenObject(head, bytes.length, putVersion, '同步槽位 $targetSlot');
+    } on WebDavException catch (e) {
+      throw WebDavException(
+        '双槽位写入失败（${e.message}），远端仍指向旧版本',
+        statusCode: e.statusCode,
+      );
+    }
+
+    // 写入期间指针若被其他设备更新，则本次发布失败，避免覆盖对方。
+    final after = await _readPointer(allowNotFound: true);
+    _ensurePointerUnchanged(after, state);
+
+    final pointerBytes = utf8.encode(
+      jsonEncode({
+        'slot': targetSlot,
+        'size': bytes.length,
+        'updatedAt': DateTime.now().toIso8601String(),
+      }),
+    );
+
+    try {
+      await _putBytes(
+        _pointerUrl,
+        pointerBytes,
+        createOnly: activeSlot == null,
+        expectedVersion: activeSlot == null ? null : after!.version,
+      );
+    } on WebDavException catch (e) {
+      throw WebDavException(
+        '指针更新失败（${e.message}），远端仍指向旧版本',
+        statusCode: e.statusCode,
+      );
+    }
+
+    return const WebDavPublishResult(mode: WebDavPublishMode.dualSlotPointer);
+  }
+
+  void _ensurePointerUnchanged(_PointerDoc? pointer, WebDavPublishState state) {
+    final expectedSlot = state.activeSlot;
+    if (expectedSlot == null) {
+      if (pointer != null) {
+        throw const WebDavConflictException('远端已被其他设备切换为指针模式');
+      }
+      return;
+    }
+    if (pointer == null) {
+      throw const WebDavConflictException('远端同步指针已被其他设备删除');
+    }
+    if (pointer.slot != expectedSlot) {
+      throw const WebDavConflictException('远端同步指针已被其他设备更新');
+    }
+    if (!_versionsEqual(state.version, pointer.version)) {
+      throw const WebDavConflictException('远端同步指针已被其他设备更新');
+    }
+  }
+
+  bool _versionsEqual(WebDavVersion expected, WebDavVersion actual) {
+    if (expected.etag != null && actual.etag != null) {
+      return expected.etag == actual.etag;
+    }
+    if (expected.lastModified != null && actual.lastModified != null) {
+      return expected.lastModified == actual.lastModified;
+    }
+    // 没有可比较的验证器：退化为只比较槽位。
+    return true;
+  }
+
+  Future<_PointerDoc?> _readPointer({required bool allowNotFound}) async {
+    final downloaded = await _downloadBytes(
+      _pointerUrl,
+      allowNotFound: allowNotFound,
+      followRedirects: false,
+      maxBytes: _maxPointerBytes,
+      label: '远端同步指针',
+    );
+    if (downloaded == null) return null;
+
+    final pointer = _requireMap(downloaded.bytes, label: '远端同步指针');
+    final slot = pointer['slot'];
+    final size = pointer['size'];
+    if (slot is! String || !_slotNames.contains(slot)) {
+      throw const WebDavException('远端同步指针中的槽位无效');
+    }
+    if (size is! int || size <= 0) {
+      throw const WebDavException('远端同步指针中的长度无效');
+    }
+    return _PointerDoc(slot: slot, size: size, version: downloaded.version);
+  }
+
+  Future<_DownloadedBytes?> _downloadBytes(
+    String url, {
+    bool allowNotFound = false,
+    bool followRedirects = true,
+    int? maxBytes,
+    String label = '远端同步文件',
+  }) async {
+    final limit = maxBytes ?? maxDownloadBytes;
+    try {
+      final response = await _send(
+        (token) => _dio.request(
+          url,
+          cancelToken: token,
+          options: _authOptions.copyWith(
+            method: 'GET',
+            responseType: ResponseType.stream,
+            followRedirects: followRedirects,
+            receiveDataWhenStatusError: false,
+          ),
+        ),
+      );
+      final statusCode = response.statusCode;
+      if (statusCode != 200) {
+        throw WebDavException(
+          '$label 读取失败（HTTP $statusCode）',
+          statusCode: statusCode,
+        );
+      }
+
+      final declaredLength = _contentLength(response.headers);
+      if (declaredLength != null && declaredLength > limit) {
+        throw _tooLargeException(limit, label);
+      }
+
+      final data = response.data;
+      if (data is! ResponseBody) {
+        throw WebDavException('$label 读取失败（响应格式不正确）');
+      }
+
+      final bytes = <int>[];
+      try {
+        await for (final chunk in data.stream) {
+          if (bytes.length + chunk.length > limit) {
+            throw _tooLargeException(limit, label);
+          }
+          bytes.addAll(chunk);
+        }
+      } on WebDavException {
+        rethrow;
+      } on DioException {
+        rethrow;
+      } catch (_) {
+        throw WebDavException('读取 $label 失败');
+      }
+
+      if (bytes.isEmpty) {
+        throw WebDavException('$label 为空');
+      }
+
+      return _DownloadedBytes(
+        bytes: bytes,
+        version: _versionFrom(response.headers),
+      );
+    } on WebDavNotFoundException {
+      if (allowNotFound) return null;
+      rethrow;
+    }
+  }
+
+  Future<Response<dynamic>> _putBytes(
+    String url,
+    List<int> bytes, {
+    bool createOnly = false,
+    WebDavVersion? expectedVersion,
+  }) {
+    final headers = <String, dynamic>{
+      ..._authOptions.headers!,
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': bytes.length.toString(),
+    };
+    if (createOnly) {
+      headers['If-None-Match'] = '*';
+    } else if (expectedVersion != null && expectedVersion.hasStrongEtag) {
+      headers['If-Match'] = expectedVersion.etag;
+    } else if (expectedVersion != null && expectedVersion.lastModified != null) {
+      headers['If-Unmodified-Since'] = expectedVersion.lastModified;
+    }
+
+    return _send(
+      (token) => _dio.request(
+        url,
+        data: Stream.fromIterable([bytes]),
+        cancelToken: token,
+        options: _authOptions.copyWith(
+          method: 'PUT',
+          headers: headers,
+          responseType: ResponseType.plain,
+          followRedirects: false,
+          receiveDataWhenStatusError: false,
+        ),
+      ),
+    );
+  }
+
+  Future<WebDavVersion?> _head(String url) async {
+    try {
+      final response = await _send(
+        (token) => _dio.request(
+          url,
           cancelToken: token,
           options: _authOptions.copyWith(
             method: 'HEAD',
@@ -184,141 +640,97 @@ class WebDavClient {
         ),
       );
       return _versionFrom(response.headers);
-    } on DioException catch (e) {
-      final mapped = _mapDioException(e);
-      if (mapped is WebDavNotFoundException) return null;
-      throw mapped;
+    } on WebDavNotFoundException {
+      return null;
     }
   }
 
-  /// Upload JSON data to WebDAV.
-  ///
-  /// [createOnly] sends `If-None-Match: *` so an existing remote file can
-  /// never be overwritten by a "first sync" push.
-  /// [expectedVersion] sends `If-Match` (or `If-Unmodified-Since` when only
-  /// Last-Modified is available) so a concurrent modification fails with 412.
-  Future<void> uploadData(
-    Map<String, dynamic> data, {
-    WebDavVersion? expectedVersion,
-    bool createOnly = false,
-  }) async {
-    await ensureDirectory();
-    final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
-    final bytes = utf8.encode(jsonStr);
-
-    final headers = <String, dynamic>{
-      ..._authOptions.headers!,
-      'Content-Type': 'application/json; charset=utf-8',
-      'Content-Length': bytes.length.toString(),
-    };
-    final version = expectedVersion;
-    if (createOnly) {
-      headers['If-None-Match'] = '*';
-    } else if (version != null && version.hasStrongEtag) {
-      headers['If-Match'] = version.etag;
-    } else if (version != null && version.lastModified != null) {
-      headers['If-Unmodified-Since'] = version.lastModified;
-    }
-
+  Future<void> _deleteBestEffort(String url) async {
     try {
-      await _runWithDeadline(
+      await _send(
         (token) => _dio.request(
-          _fileUrl,
-          data: Stream.fromIterable([bytes]),
+          url,
           cancelToken: token,
           options: _authOptions.copyWith(
-            method: 'PUT',
-            headers: headers,
-            responseType: ResponseType.plain,
-            // 关键：PUT 不允许跟随重定向。Dart HttpClient 会把重定向后的
-            // 请求体重置为空，跟随 3xx 可能用空 body 覆盖远端文件。
+            method: 'DELETE',
             followRedirects: false,
             receiveDataWhenStatusError: false,
           ),
         ),
       );
-    } on DioException catch (e) {
-      throw _mapDioException(e);
+    } on WebDavException {
+      // 清理失败不影响主流程。
     }
   }
 
-  /// Download JSON data from WebDAV.
-  ///
-  /// Returns null ONLY when the remote file does not exist (HTTP 404).
-  /// Any other failure throws a [WebDavException] so callers never mistake it
-  /// for a first-time sync.
-  Future<WebDavDownload?> downloadData() async {
-    try {
-      return await _runWithDeadline((token) async {
-        final response = await _dio.request(
-          _fileUrl,
-          cancelToken: token,
-          options: _authOptions.copyWith(
-            method: 'GET',
-            responseType: ResponseType.stream,
-            receiveDataWhenStatusError: false,
-          ),
-        );
-        final statusCode = response.statusCode;
-        if (statusCode != 200) {
-          throw WebDavException(
-            '远端同步文件读取失败（HTTP $statusCode）',
-            statusCode: statusCode,
-          );
-        }
-
-        final declaredLength = _contentLength(response.headers);
-        if (declaredLength != null && declaredLength > maxDownloadBytes) {
-          throw _tooLargeException();
-        }
-
-        final data = response.data;
-        if (data is! ResponseBody) {
-          throw const WebDavException('远端同步文件读取失败（响应格式不正确）');
-        }
-
-        final bytes = <int>[];
-        try {
-          await for (final chunk in data.stream) {
-            if (bytes.length + chunk.length > maxDownloadBytes) {
-              throw _tooLargeException();
-            }
-            bytes.addAll(chunk);
-          }
-        } on WebDavException {
-          rethrow;
-        } on DioException {
-          rethrow;
-        } catch (_) {
-          throw const WebDavException('读取远端同步文件失败');
-        }
-
-        if (bytes.isEmpty) {
-          throw const WebDavException('远端同步文件为空');
-        }
-
-        final text = utf8.decode(bytes, allowMalformed: true);
-        dynamic decoded;
-        try {
-          decoded = jsonDecode(text);
-        } on FormatException {
-          // 不使用原始 FormatException：它会携带源码片段并显示到界面上。
-          throw const WebDavException('远端同步文件不是合法的 JSON');
-        }
-        if (decoded is! Map<String, dynamic>) {
-          throw const WebDavException('远端同步文件格式不正确');
-        }
-
-        return WebDavDownload(
-          data: decoded,
-          version: _versionFrom(response.headers),
-        );
-      });
-    } on DioException catch (e) {
-      final mapped = _mapDioException(e);
-      if (mapped is WebDavNotFoundException) return null;
-      throw mapped;
+  void _verifyWrittenObject(
+    WebDavVersion? head,
+    int expectedLength,
+    WebDavVersion putVersion,
+    String label,
+  ) {
+    if (head == null) {
+      throw WebDavException('$label 写入校验失败（HEAD 未找到）');
     }
+    final length = head.contentLength;
+    if (length != null && length != expectedLength) {
+      throw WebDavException(
+        '$label 写入校验失败（长度 $length != $expectedLength）',
+      );
+    }
+    if (putVersion.etag != null &&
+        head.etag != null &&
+        putVersion.etag != head.etag) {
+      throw WebDavException('$label 写入校验失败（ETag 不一致）');
+    }
+    // 服务器既不返回长度也不返回 ETag 时无法校验，只能接受（降级）。
+  }
+
+  bool _destinationUnchanged(WebDavVersion? current, WebDavPublishState state) {
+    if (!state.remoteExists) return current == null;
+    final expected = state.version;
+
+    if (state.revalidateDestination) {
+      if (current == null) return false;
+    }
+
+    if (expected.etag != null && current?.etag != null) {
+      return expected.etag == current!.etag;
+    }
+    if (expected.lastModified != null && current?.lastModified != null) {
+      return expected.lastModified == current!.lastModified;
+    }
+    // 没有可比较的验证器：无法检测并发修改，放行（降级）。
+    return true;
+  }
+
+  Map<String, dynamic> _requireSnapshot(
+    List<int> bytes, {
+    required String label,
+  }) {
+    final map = _requireMap(bytes, label: label);
+    if (map['inspirations'] is! List) {
+      throw WebDavException('$label 格式不正确');
+    }
+    return map;
+  }
+
+  Map<String, dynamic> _requireMap(
+    List<int> bytes, {
+    required String label,
+  }) {
+    final text = utf8.decode(bytes, allowMalformed: true);
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException {
+      // 不使用原始 FormatException：它会携带源码片段并显示到界面上。
+      throw WebDavException('$label 不是合法的 JSON');
+    }
+    if (decoded is! Map<String, dynamic>) {
+      throw WebDavException('$label 格式不正确');
+    }
+    return decoded;
   }
 
   int? _contentLength(Headers headers) {
@@ -327,9 +739,11 @@ class WebDavClient {
     return int.tryParse(value);
   }
 
-  WebDavException _tooLargeException() {
-    final limitMb = maxDownloadBytes ~/ (1024 * 1024);
-    return WebDavException('远端同步文件过大（上限 $limitMb MB），已中止下载');
+  WebDavException _tooLargeException(int limit, String label) {
+    final size = limit >= 1024 * 1024
+        ? '${limit ~/ (1024 * 1024)} MB'
+        : '${limit ~/ 1024} KB';
+    return WebDavException('$label 过大（上限 $size），已中止下载');
   }
 
   WebDavVersion _versionFrom(Headers headers) {
@@ -341,7 +755,13 @@ class WebDavClient {
           (lastModified == null || lastModified.isEmpty)
               ? null
               : lastModified,
+      contentLength: _contentLength(headers),
     );
+  }
+
+  String _fileNameOf(String url) {
+    final segments = Uri.parse(url).pathSegments;
+    return segments.isEmpty ? url : segments.last;
   }
 
   /// 整体请求超时兜底。Dio 的 receiveTimeout 只覆盖等待响应头，
@@ -362,6 +782,17 @@ class WebDavClient {
       ]);
     } finally {
       timer.cancel();
+    }
+  }
+
+  /// 统一把 DioException 转成领域异常，避免调用方再看到 Dio 类型。
+  Future<Response<dynamic>> _send(
+    Future<Response<dynamic>> Function(CancelToken token) action,
+  ) async {
+    try {
+      return await _runWithDeadline(action);
+    } on DioException catch (e) {
+      throw _mapDioException(e);
     }
   }
 
@@ -410,4 +841,23 @@ class WebDavClient {
     }
     return WebDavException('HTTP $statusCode', statusCode: statusCode);
   }
+}
+
+class _PointerDoc {
+  const _PointerDoc({
+    required this.slot,
+    required this.size,
+    required this.version,
+  });
+
+  final String slot;
+  final int size;
+  final WebDavVersion version;
+}
+
+class _DownloadedBytes {
+  const _DownloadedBytes({required this.bytes, required this.version});
+
+  final List<int> bytes;
+  final WebDavVersion version;
 }
