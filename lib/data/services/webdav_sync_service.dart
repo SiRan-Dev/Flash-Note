@@ -508,7 +508,7 @@ class WebDavSyncService {
                       ? Value(d['id'] as int)
                       : const Value.absent(),
               entityType: d['entityType'] as String,
-              entityId: d['entityId'] as int,
+              entityId: Value<int?>(d['entityId'] as int),
               deletedAt: d['deletedAt'] as int,
             ),
           );
