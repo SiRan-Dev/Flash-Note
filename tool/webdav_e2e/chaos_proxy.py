@@ -30,14 +30,15 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 18082
 
 PREFIXES = ("/redirectput", "/redirect", "/noetag", "/race", "/cut", "/nomove")
-FINAL_PATH = "/FlashNote/flashnote_sync.json"
+FINAL_PATH = "/FlashNote/flashnote_sync_v7.json"
 
 OTHER_DEVICE_SNAPSHOT = {
-    "version": 6,
+    "version": 7,
+    "deviceId": "device-other",
     "exportedAt": "2026-05-16T00:00:00.000",
     "inspirations": [
         {
-            "id": 9001,
+            "uuid": "00000000-0000-4000-8000-000000000901",
             "content": "另一台设备写入的灵感",
             "createdAt": 3000,
             "updatedAt": 3000,

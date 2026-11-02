@@ -61,7 +61,9 @@ void main() {
   }
 
   String remoteJsonWith(String content) => jsonEncode(
-    snapshot(inspirations: [inspiration(id: 2, content: content, createdAt: 2000)]),
+    snapshot(
+      inspirations: [inspiration(id: 2, content: content, createdAt: 2000)],
+    ),
   );
 
   setUp(() async {
@@ -115,7 +117,7 @@ void main() {
       expect(put.headers['If-None-Match'], '*');
       expect(dav.requests.any((r) => r.method == 'MOVE'), isTrue);
 
-      expect(contentsOf(dav.files['flashnote_sync.json']!.text), ['本地灵感']);
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), ['本地灵感']);
       final local = await db.getAllInspirations();
       expect(local, hasLength(1));
       expect(local.single.content, '本地灵感');
@@ -129,10 +131,9 @@ void main() {
       expect(result.isSuccess, isFalse);
       expect(result.message, contains('其他设备'));
       expect(dav.requests.any((r) => r.method == 'MOVE'), isFalse);
-      expect(
-        contentsOf(dav.files['flashnote_sync.json']!.text),
-        ['其他设备的灵感'],
-      );
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), [
+        '其他设备的灵感',
+      ]);
 
       final local = await db.getAllInspirations();
       expect(local, hasLength(1));
@@ -142,17 +143,16 @@ void main() {
 
   group('后续合并', () {
     test('远端被其他设备更新 -> 412 中止，远端与本地都不被覆盖', () async {
-      dav.seedLegacy(remoteJsonWith('远端灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('远端灵感'), etag: '"v1"');
       dav.simulateDestinationRace = true;
 
       final result = await service.mergeSync();
 
       expect(result.isSuccess, isFalse);
       expect(result.message, contains('其他设备'));
-      expect(
-        contentsOf(dav.files['flashnote_sync.json']!.text),
-        ['其他设备的灵感'],
-      );
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), [
+        '其他设备的灵感',
+      ]);
 
       final local = await db.getAllInspirations();
       expect(local, hasLength(1));
@@ -160,7 +160,7 @@ void main() {
     });
 
     test('正常单设备合并 -> MOVE 原子替换，远端与本地都得到双方数据', () async {
-      dav.seedLegacy(remoteJsonWith('远端灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('远端灵感'), etag: '"v1"');
 
       final result = await service.mergeSync();
 
@@ -171,7 +171,7 @@ void main() {
       expect(dav.requests.any((r) => r.method == 'MOVE'), isTrue);
 
       expect(
-        contentsOf(dav.files['flashnote_sync.json']!.text),
+        contentsOf(dav.files['flashnote_sync_v7.json']!.text),
         containsAll(['本地灵感', '远端灵感']),
       );
       final local = await db.getAllInspirations();
@@ -180,7 +180,7 @@ void main() {
     });
 
     test('PUT 中途断连 -> 临时对象被清理，正式文件仍是完整旧快照', () async {
-      dav.seedLegacy(remoteJsonWith('远端灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('远端灵感'), etag: '"v1"');
       dav.truncateTempOnPut = true;
 
       final result = await service.mergeSync();
@@ -188,7 +188,7 @@ void main() {
       expect(result.isSuccess, isFalse);
       expect(dav.requests.any((r) => r.method == 'MOVE'), isFalse);
       // 正式文件仍是合法的旧快照，没有被截断。
-      final remote = dav.files['flashnote_sync.json']!;
+      final remote = dav.files['flashnote_sync_v7.json']!;
       expect(remote.text, isNotEmpty);
       expect(jsonDecode(remote.text), isA<Map<String, dynamic>>());
       expect(contentsOf(remote.text), ['远端灵感']);
@@ -201,7 +201,7 @@ void main() {
     });
 
     test('MOVE 405 -> 双槽位 + 指针降级，旧正式文件保持完好', () async {
-      dav.seedLegacy(remoteJsonWith('远端灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('远端灵感'), etag: '"v1"');
       dav.moveSupported = false;
 
       final result = await service.mergeSync();
@@ -212,12 +212,13 @@ void main() {
       expect(dav.requests.any((r) => r.method == 'MOVE'), isTrue);
 
       // 旧正式文件没有被改写，仍可被旧客户端读取。
-      expect(contentsOf(dav.files['flashnote_sync.json']!.text), ['远端灵感']);
-      final pointer = jsonDecode(dav.files['flashnote_sync.pointer.json']!.text)
-          as Map<String, dynamic>;
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), ['远端灵感']);
+      final pointer =
+          jsonDecode(dav.files['flashnote_sync_v7.pointer.json']!.text)
+              as Map<String, dynamic>;
       expect(pointer['slot'], 'a');
       expect(
-        contentsOf(dav.files['flashnote_sync.a.json']!.text),
+        contentsOf(dav.files['flashnote_sync_v7.a.json']!.text),
         containsAll(['本地灵感', '远端灵感']),
       );
 
@@ -233,7 +234,7 @@ void main() {
         size: utf8.encode(remoteJsonWith('远端灵感')).length,
       );
       dav.seedSlot('a', utf8.encode(remoteJsonWith('远端灵感')));
-      dav.seedLegacy(remoteJsonWith('旧文件灵感'), etag: '"old"');
+      dav.seedSnapshot(remoteJsonWith('旧文件灵感'), etag: '"old"');
 
       final result = await service.pullFromRemote();
 
@@ -248,7 +249,7 @@ void main() {
 
   group('推送', () {
     test('HEAD 探测后临时对象 + MOVE，单设备推送成功', () async {
-      dav.seedLegacy(remoteJsonWith('远端灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('远端灵感'), etag: '"v1"');
 
       final result = await service.pushToRemote();
 
@@ -256,32 +257,31 @@ void main() {
       expect(result.message, contains('原子发布'));
       expect(result.publishMode, 'atomicMove');
       expect(dav.requests.any((r) => r.method == 'MOVE'), isTrue);
-      expect(contentsOf(dav.files['flashnote_sync.json']!.text), ['本地灵感']);
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), ['本地灵感']);
     });
 
     test('服务器不支持 HEAD 时跳过复核但继续原子发布', () async {
-      dav.seedLegacy(remoteJsonWith('远端灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('远端灵感'), etag: '"v1"');
       dav.headFinalStatus = 405;
 
       final result = await service.pushToRemote();
 
       expect(result.isSuccess, isTrue);
       expect(result.message, contains('原子发布'));
-      expect(contentsOf(dav.files['flashnote_sync.json']!.text), ['本地灵感']);
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), ['本地灵感']);
     });
 
     test('推送遇到其他设备写入 -> 中止且远端不变', () async {
-      dav.seedLegacy(remoteJsonWith('其他设备的灵感'), etag: '"v1"');
+      dav.seedSnapshot(remoteJsonWith('其他设备的灵感'), etag: '"v1"');
       dav.simulateDestinationRace = true;
 
       final result = await service.pushToRemote();
 
       expect(result.isSuccess, isFalse);
       expect(result.message, contains('其他设备'));
-      expect(
-        contentsOf(dav.files['flashnote_sync.json']!.text),
-        ['其他设备的灵感'],
-      );
+      expect(contentsOf(dav.files['flashnote_sync_v7.json']!.text), [
+        '其他设备的灵感',
+      ]);
     });
   });
 
@@ -323,19 +323,19 @@ class _FakeDav implements HttpClientAdapter {
   int? unauthorizedStatus;
   int? headFinalStatus;
 
-  void seedLegacy(String body, {required String etag}) {
-    files['flashnote_sync.json'] = _Item(utf8.encode(body), etag: etag);
+  void seedSnapshot(String body, {required String etag}) {
+    files['flashnote_sync_v7.json'] = _Item(utf8.encode(body), etag: etag);
   }
 
   void seedPointer({required String slot, required int size}) {
-    files['flashnote_sync.pointer.json'] = _Item(
+    files['flashnote_sync_v7.pointer.json'] = _Item(
       utf8.encode(jsonEncode({'slot': slot, 'size': size})),
       etag: '"ptr1"',
     );
   }
 
   void seedSlot(String slot, List<int> bytes) {
-    files['flashnote_sync.$slot.json'] = _Item(bytes, etag: '"slot-$slot"');
+    files['flashnote_sync_v7.$slot.json'] = _Item(bytes, etag: '"slot-$slot"');
   }
 
   Map<String, List<String>> _headersFor(String name) {
@@ -391,7 +391,7 @@ class _FakeDav implements HttpClientAdapter {
           headers: _headersFor(name),
         );
       case 'HEAD':
-        if (name == 'flashnote_sync.json' && headFinalStatus != null) {
+        if (name == 'flashnote_sync_v7.json' && headFinalStatus != null) {
           return _text('', headFinalStatus!);
         }
         if (files[name] == null) return _text('', 404);
@@ -412,12 +412,10 @@ class _FakeDav implements HttpClientAdapter {
         final item = _Item(stored, etag: '"v${++_etagSeq}"');
         files[name] = item;
         if (simulateDestinationRace && name.endsWith('.tmp')) {
-          files['flashnote_sync.json'] = _Item(
+          files['flashnote_sync_v7.json'] = _Item(
             utf8.encode(
               jsonEncode(
-                _snapshot(
-                  inspirations: [_inspiration(9001, '其他设备的灵感', 3000)],
-                ),
+                _snapshot(inspirations: [_inspiration(9001, '其他设备的灵感', 3000)]),
               ),
             ),
             etag: '"other"',
