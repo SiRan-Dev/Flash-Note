@@ -6,6 +6,7 @@ import 'package:flashnote/l10n/app_localizations.dart';
 import 'package:flashnote/presentation/providers/theme_provider.dart';
 import 'package:flashnote/presentation/providers/webdav_provider.dart';
 import 'package:flashnote/presentation/providers/memory_pressure_provider.dart';
+import 'package:flashnote/presentation/widgets/database_gate.dart';
 import 'package:flashnote/presentation/widgets/startup_update_checker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -116,8 +117,10 @@ class _FlashNoteAppState extends ConsumerState<FlashNoteApp> {
               scrollBehavior: const _FlashNoteScrollBehavior(),
               routerConfig: router,
               builder:
-                  (context, child) => StartupUpdateChecker(
-                    child: child ?? const SizedBox.shrink(),
+                  (context, child) => DatabaseGate(
+                    child: StartupUpdateChecker(
+                      child: child ?? const SizedBox.shrink(),
+                    ),
                   ),
               debugShowCheckedModeBanner: false,
               localizationsDelegates: const [

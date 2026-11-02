@@ -1,10 +1,14 @@
+import 'package:drift/native.dart';
 import 'package:flashnote/app/app.dart';
+import 'package:flashnote/data/datasources/local/app_database.dart'
+    show AppDatabase;
 import 'package:flashnote/domain/entities/inspiration.dart';
 import 'package:flashnote/domain/entities/project.dart';
 import 'package:flashnote/domain/entities/task.dart';
 import 'package:flashnote/domain/repositories/inspiration_repository.dart';
 import 'package:flashnote/domain/repositories/project_repository.dart';
 import 'package:flashnote/domain/repositories/task_repository.dart';
+import 'package:flashnote/presentation/providers/database_provider.dart';
 import 'package:flashnote/presentation/providers/inspiration_providers.dart';
 import 'package:flashnote/presentation/providers/project_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,9 +16,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('FlashNoteApp can be instantiated', (WidgetTester tester) async {
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          databaseProvider.overrideWithValue(database),
           inspirationRepositoryProvider.overrideWithValue(
             _FakeInspirationRepository(),
           ),
