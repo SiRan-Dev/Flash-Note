@@ -35,3 +35,55 @@ jobs:
 
       - name: Test
         run: flutter test
+
+  # Keeps the native Android toolchain honest: analyze/test alone cannot catch
+  # a broken Gradle/AGP/Kotlin upgrade (see PR #9). Debug-only on purpose —
+  # release signing and store artifacts stay in release.yml.
+  android-build:
+    name: Android Build (debug APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # app/build.gradle.kts pins jvmToolchain(17) and PR #9 removed the foojay
+      # resolver, so Gradle cannot provision a JDK by itself.
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: 'stable'
+          cache: true
+
+      # Cache key covers the Gradle distribution (wrapper properties pins
+      # 9.3.1) and the resolved Dart dependencies; restore-keys keep the
+      # wrapper and dependency caches usable across dependency-only bumps.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'pubspec.lock') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Generated sources (*.g.dart / *.freezed.dart) are not committed.
+      - name: Generate code
+        run: dart run build_runner build
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+
+      # Log the artifact size only; the APK itself is never uploaded from CI.
+      - name: Report APK size
+        run: ls -lh build/app/outputs/flutter-apk/app-debug.apk
