@@ -1831,6 +1831,12 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'分享的图片'**
   String get sharedImageContent;
+
+  /// No description provided for @hotkeyRegistrationFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'全局热键注册失败，可能已被其他应用占用'**
+  String get hotkeyRegistrationFailed;
 }
 
 class _AppLocalizationsDelegate

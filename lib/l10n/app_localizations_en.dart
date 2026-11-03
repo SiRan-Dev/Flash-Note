@@ -899,4 +899,8 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get sharedImageContent => 'Shared image';
+
+  @override
+  String get hotkeyRegistrationFailed =>
+      'Could not register the global hotkey; another app may be using it.';
 }

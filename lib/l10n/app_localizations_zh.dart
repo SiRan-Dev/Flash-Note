@@ -878,4 +878,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get sharedImageContent => '分享的图片';
+
+  @override
+  String get hotkeyRegistrationFailed => '全局热键注册失败，可能已被其他应用占用';
 }

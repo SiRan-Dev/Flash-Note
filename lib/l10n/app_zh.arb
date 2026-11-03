@@ -295,5 +295,6 @@
   },
   "shareEmpty": "分享内容为空，未保存",
   "shareFailed": "分享内容保存失败",
-  "sharedImageContent": "分享的图片"
+  "sharedImageContent": "分享的图片",
+  "hotkeyRegistrationFailed": "全局热键注册失败，可能已被其他应用占用"
 }

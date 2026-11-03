@@ -7,6 +7,7 @@ import 'package:flashnote/presentation/providers/theme_provider.dart';
 import 'package:flashnote/presentation/providers/webdav_provider.dart';
 import 'package:flashnote/presentation/providers/memory_pressure_provider.dart';
 import 'package:flashnote/presentation/widgets/database_gate.dart';
+import 'package:flashnote/presentation/widgets/hotkey/global_hotkey_listener.dart';
 import 'package:flashnote/presentation/widgets/share_intake/share_intake_listener.dart';
 import 'package:flashnote/presentation/widgets/startup_update_checker.dart';
 import 'package:flutter/gestures.dart';
@@ -120,8 +121,10 @@ class _FlashNoteAppState extends ConsumerState<FlashNoteApp> {
               builder:
                   (context, child) => DatabaseGate(
                     child: ShareIntakeListener(
-                      child: StartupUpdateChecker(
-                        child: child ?? const SizedBox.shrink(),
+                      child: GlobalHotkeyListener(
+                        child: StartupUpdateChecker(
+                          child: child ?? const SizedBox.shrink(),
+                        ),
                       ),
                     ),
                   ),

@@ -295,5 +295,6 @@
   },
   "shareEmpty": "Nothing was shared, so nothing was saved",
   "shareFailed": "Could not save the shared content",
-  "sharedImageContent": "Shared image"
+  "sharedImageContent": "Shared image",
+  "hotkeyRegistrationFailed": "Could not register the global hotkey; another app may be using it."
 }
