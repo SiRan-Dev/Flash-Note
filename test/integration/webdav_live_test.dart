@@ -262,6 +262,52 @@ void main() {
       await ctx.dispose();
     }, skip: _skipLive);
 
+    test('旧双槽位：远端只有旧指针+槽位 -> 升级并发布到 v7 文件，之后不再读旧槽位', () async {
+      await _deleteRemote();
+      await _raw('MKCOL', Uri.parse('$_envServer/FlashNote/'));
+      final slotBody = jsonEncode(
+        _legacySnapshot(inspirations: [_legacyInspiration(3, '槽位灵感', 2500)]),
+      );
+      final slotBytes = utf8.encode(slotBody);
+      await _raw(
+        'PUT',
+        _fileUri(_envServer, 'flashnote_sync.a.json'),
+        body: slotBytes,
+      );
+      await _raw(
+        'PUT',
+        _fileUri(_envServer, 'flashnote_sync.pointer.json'),
+        body: utf8.encode(jsonEncode({'slot': 'a', 'size': slotBytes.length})),
+      );
+
+      final ctx = await _makeCtx();
+      final result = await ctx.service.mergeSync();
+      final v7 = await _raw('GET', _fileUri(_envServer));
+      _evidence(
+        'legacy slots upgrade result=${result.isSuccess} "${result.message}"\n'
+        '  v7 status=${v7.status} contents=${_contents(v7.text)}',
+      );
+
+      expect(result.isSuccess, isTrue);
+      expect(v7.status, 200);
+      expect(_contents(v7.text), containsAll(['本地灵感', '槽位灵感']));
+      await ctx.dispose();
+
+      // v7 文件写入后，后续同步不再读取旧指针/旧槽位。
+      final ctx2 = await _makeCtx();
+      final second = await ctx2.service.mergeSync();
+      expect(second.isSuccess, isTrue);
+      expect(
+        ctx2.recorder.events.any(
+          (e) =>
+              e.contains('/flashnote_sync.pointer.json') ||
+              e.contains('/flashnote_sync.a.json'),
+        ),
+        isFalse,
+      );
+      await ctx2.dispose();
+    }, skip: _skipLive);
+
     test('正常合并：两端各自新增 -> 临时对象 + MOVE，双方数据都在', () async {
       await _deleteRemote();
       await _seedRemote(

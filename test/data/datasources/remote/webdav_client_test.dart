@@ -16,8 +16,9 @@ void main() {
 
       expect(result, isNull);
       expect(dav.requests.every((r) => r.method == 'GET'), isTrue);
-      // 指针 + v7 主文件 + 旧文件回退，共三次只读探测。
-      expect(dav.requests, hasLength(3));
+      // v7 指针 + v7 主文件 + 旧指针 + 旧单文件 + 两个旧孤儿槽位，
+      // 共六次只读探测。
+      expect(dav.requests, hasLength(6));
     });
 
     test('只有旧文件时只读回退，并告知调用方需要升级到 v7', () async {
@@ -32,6 +33,128 @@ void main() {
       expect(result.data['version'], 6);
       expect(result.publishState.remoteExists, isFalse);
       expect(dav.files.containsKey('flashnote_sync_v7.json'), isFalse);
+    });
+
+    test('远端只有旧指针+槽位 -> 按指针读槽位，并标记为待升级的旧数据', () async {
+      final dav = _FakeDav();
+      final slotBytes = utf8.encode(jsonEncode(_validSnapshot()));
+      dav.seedLegacyPointer(slot: 'b', size: slotBytes.length);
+      dav.seedLegacySlot('b', slotBytes);
+      final client = _client(dav);
+
+      final result = await client.downloadData();
+
+      expect(result, isNotNull);
+      expect(result!.fromLegacyFile, isTrue);
+      expect(result.publishState.remoteExists, isFalse);
+      expect(result.data['version'], 6);
+      final getNames = dav.requests
+          .where((r) => r.method == 'GET')
+          .map(_name)
+          .toList();
+      expect(getNames, contains('flashnote_sync.pointer.json'));
+      expect(getNames, contains('flashnote_sync.b.json'));
+      // 指针命中后不应再去读旧单文件。
+      expect(getNames, isNot(contains('flashnote_sync.json')));
+    });
+
+    test('旧单文件与旧槽位同时存在 -> 读槽位（双槽位模式后单文件已过期）', () async {
+      final dav = _FakeDav();
+      dav.seedOldFile(
+        jsonEncode(_validSnapshot(exportedAt: '2026-01-01T00:00:00.000')),
+        etag: '"stale"',
+      );
+      final slotBytes = utf8.encode(
+        jsonEncode(
+          _validSnapshot(
+            exportedAt: '2026-06-01T00:00:00.000',
+            inspirations: [_inspiration(7, '槽位里的新数据', 3000)],
+          ),
+        ),
+      );
+      dav.seedLegacyPointer(slot: 'a', size: slotBytes.length);
+      dav.seedLegacySlot('a', slotBytes);
+      final client = _client(dav);
+
+      final result = await client.downloadData();
+
+      expect(result, isNotNull);
+      expect(result!.fromLegacyFile, isTrue);
+      final inspirations = (result.data['inspirations'] as List)
+          .cast<Map<String, dynamic>>();
+      expect(inspirations.single['content'], '槽位里的新数据');
+    });
+
+    test('旧指针缺失但孤儿槽位存在 -> 取 exportedAt 更新的槽位', () async {
+      final dav = _FakeDav();
+      dav.seedLegacySlot(
+        'a',
+        utf8.encode(
+          jsonEncode(
+            _validSnapshot(
+              exportedAt: '2026-02-01T00:00:00.000',
+              inspirations: [_inspiration(1, '旧槽位', 1000)],
+            ),
+          ),
+        ),
+      );
+      dav.seedLegacySlot(
+        'b',
+        utf8.encode(
+          jsonEncode(
+            _validSnapshot(
+              exportedAt: '2026-07-01T00:00:00.000',
+              inspirations: [_inspiration(2, '新槽位', 2000)],
+            ),
+          ),
+        ),
+      );
+      final client = _client(dav);
+
+      final result = await client.downloadData();
+
+      expect(result, isNotNull);
+      expect(result!.fromLegacyFile, isTrue);
+      final inspirations = (result.data['inspirations'] as List)
+          .cast<Map<String, dynamic>>();
+      expect(inspirations.single['content'], '新槽位');
+    });
+
+    test('旧指针指向的槽位长度不一致 -> 明确报错而不是静默跳过', () async {
+      final dav = _FakeDav();
+      dav.seedLegacyPointer(slot: 'a', size: 999999);
+      dav.seedLegacySlot('a', utf8.encode(jsonEncode(_validSnapshot())));
+      final client = _client(dav);
+
+      await expectLater(
+        client.downloadData(),
+        throwsA(
+          isA<WebDavException>().having(
+            (e) => e.message,
+            'message',
+            contains('长度不一致'),
+          ),
+        ),
+      );
+    });
+
+    test('旧指针指向的槽位不是合法 JSON -> 明确报错', () async {
+      final dav = _FakeDav();
+      final broken = utf8.encode('<html>truncated');
+      dav.seedLegacyPointer(slot: 'a', size: broken.length);
+      dav.seedLegacySlot('a', broken);
+      final client = _client(dav);
+
+      await expectLater(
+        client.downloadData(),
+        throwsA(
+          isA<WebDavException>().having(
+            (e) => e.message,
+            'message',
+            contains('不是合法的 JSON'),
+          ),
+        ),
+      );
     });
 
     test('GET 401 抛 WebDavAuthException 而不是 null', () async {
@@ -472,10 +595,11 @@ List<int> _validSnapshotBytes() => utf8.encode(jsonEncode(_validSnapshot()));
 
 Map<String, dynamic> _validSnapshot({
   List<Map<String, dynamic>> inspirations = const [],
+  String exportedAt = '2026-05-16T00:00:00.000',
 }) {
   return {
     'version': 6,
-    'exportedAt': '2026-05-16T00:00:00.000',
+    'exportedAt': exportedAt,
     'inspirations': inspirations,
     'projects': <Map<String, dynamic>>[],
     'tasks': <Map<String, dynamic>>[],
@@ -540,6 +664,17 @@ class _FakeDav implements HttpClientAdapter {
 
   void seedOldFile(String body, {required String etag}) {
     files['flashnote_sync.json'] = _Item(utf8.encode(body), etag: etag);
+  }
+
+  void seedLegacyPointer({required String slot, required int size}) {
+    files['flashnote_sync.pointer.json'] = _Item(
+      utf8.encode(jsonEncode({'slot': slot, 'size': size})),
+      etag: '"legacy-ptr"',
+    );
+  }
+
+  void seedLegacySlot(String slot, List<int> bytes) {
+    files['flashnote_sync.$slot.json'] = _Item(bytes, etag: '"legacy-$slot"');
   }
 
   void seedPointer({required String slot, required int size}) {

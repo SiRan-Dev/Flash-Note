@@ -63,8 +63,13 @@ class WebDavSyncService {
   ) => _stripCredentials(snapshot);
 
   @visibleForTesting
-  Future<bool> importSnapshotForTesting(Map<String, dynamic> data) =>
-      _importFromJson(data);
+  Future<(bool, SnapshotImportSummary)> importSnapshotForTesting(
+    Map<String, dynamic> data, {
+    bool preserveConflictingAttachments = false,
+  }) => _importFromJson(
+    data,
+    preserveConflictingAttachments: preserveConflictingAttachments,
+  );
 
   Future<WebDavClient> _getClient() async {
     final factory = _clientFactory;
@@ -111,7 +116,13 @@ class WebDavSyncService {
   /// The whole snapshot is validated before anything is touched, all database
   /// writes run in a single transaction, and local attachment files are never
   /// deleted. A parse/validation failure therefore leaves local data intact.
-  Future<bool> _importFromJson(Map<String, dynamic> data) async {
+  ///
+  /// 返回 (AI 设置是否变化, 导入摘要)。[preserveConflictingAttachments] 见
+  /// [SnapshotCodec.importSnapshot]：合并同步传 true，拉取/文件导入传 false。
+  Future<(bool, SnapshotImportSummary)> _importFromJson(
+    Map<String, dynamic> data, {
+    bool preserveConflictingAttachments = false,
+  }) async {
     validateSnapshot(data);
     final version = data['version'] as int? ?? 1;
     final deviceId = await webdavStorage.getOrCreateDeviceId();
@@ -121,12 +132,17 @@ class WebDavSyncService {
     // 升级后的快照也必须通过 v7 校验，避免把坏数据写进本地库。
     validateSnapshot(normalized);
 
-    await db.transaction(() => _codec.importSnapshot(normalized));
+    final summary = await db.transaction(
+      () => _codec.importSnapshot(
+        normalized,
+        preserveConflictingAttachments: preserveConflictingAttachments,
+      ),
+    );
 
     // Import AI settings only after the database transaction has committed.
     final aiSettings = normalized['aiSettings'] as Map<String, dynamic>?;
-    if (aiSettings == null) return false;
-    return await _importAiSettings(aiSettings);
+    if (aiSettings == null) return (false, summary);
+    return (await _importAiSettings(aiSettings), summary);
   }
 
   /// Pull: download remote data and overwrite local
@@ -140,7 +156,8 @@ class WebDavSyncService {
       if (download == null) {
         return const SyncResult.failure('远端没有同步数据');
       }
-      final aiSettingsChanged = await _importFromJson(download.data);
+      // 拉取是明确的“远端覆盖本地”语义：附件内容直接采用远端版本。
+      final (aiSettingsChanged, _) = await _importFromJson(download.data);
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
@@ -241,14 +258,23 @@ class WebDavSyncService {
       );
 
       // Apply the merged result locally only after the publish succeeded, so a
-      // failed publish never changes local data.
-      final aiSettingsChanged = await _importFromJson(merged);
+      // failed publish never changes local data. 合并时附件内容冲突不静默
+      // 挑选：保留本机文件并另存副本，冲突数量在结果里报告。
+      final (aiSettingsChanged, summary) = await _importFromJson(
+        merged,
+        preserveConflictingAttachments: true,
+      );
 
       await webdavStorage.setLastSyncTime(
         DateTime.now().millisecondsSinceEpoch,
       );
+      var message = '合并同步成功（${published.mode.label}）';
+      if (summary.attachmentConflicts > 0) {
+        message +=
+            '，${summary.attachmentConflicts} 个附件内容冲突，已保留本机文件（副本后缀 .conflict）';
+      }
       return SyncResult.success(
-        message: '合并同步成功（${published.mode.label}）',
+        message: message,
         aiSettingsChanged: aiSettingsChanged,
         credentialsRequired: await _needsAiKey(),
         publishMode: published.mode.name,

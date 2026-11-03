@@ -42,6 +42,7 @@ dev_dependencies:
   freezed: ^4.0.1
   json_serializable: ^6.9.4
   lint: ^2.8.0
+  path_provider_platform_interface: ^2.1.0
 
 flutter:
   uses-material-design: true

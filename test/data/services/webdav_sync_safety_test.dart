@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flashnote/data/datasources/local/ai_settings_storage.dart';
 import 'package:flashnote/data/datasources/local/app_database.dart';
@@ -10,6 +12,7 @@ import 'package:flashnote/data/datasources/remote/webdav_client.dart';
 import 'package:flashnote/data/services/webdav_sync_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -299,6 +302,122 @@ void main() {
       expect(local.single.content, '本地灵感');
     });
   });
+
+  group('附件内容冲突', () {
+    const inspirationUuid = '00000000-0000-4000-8000-000000000b01';
+    const attachmentUuid = '00000000-0000-4000-8000-000000000b02';
+
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('flashnote_conflict');
+      PathProviderPlatform.instance = _FakePathProviderPlatform(tempDir.path);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('webdav_sync_attachments', true);
+    });
+
+    tearDown(() async {
+      await tempDir.delete(recursive: true);
+    });
+
+    test('合并时两端附件内容不同 -> 报告冲突、保留本机文件、远端内容存副本', () async {
+      // 本地：灵感 + 附件行 + 物理文件（内容为本机版本）。
+      final inspirationId = await db.insertInspiration(
+        InspirationsCompanion.insert(
+          content: '本地灵感',
+          createdAt: 1000,
+          updatedAt: 1000,
+          uuid: const Value(inspirationUuid),
+        ),
+      );
+      final localPath =
+          '${tempDir.path}/attachments/${1000}_${attachmentUuid}_note.txt';
+      await File(localPath).create(recursive: true);
+      await File(localPath).writeAsString('本机内容');
+      await db.insertAttachment(
+        AttachmentsCompanion.insert(
+          ownerType: 'inspiration',
+          ownerId: inspirationId,
+          fileName: 'note.txt',
+          filePath: localPath,
+          mimeType: 'text/plain',
+          createdAt: 1000,
+          uuid: const Value(attachmentUuid),
+        ),
+      );
+      // setUp 里那条无 uuid 关联的本地灵感删掉，避免干扰合并断言。
+      for (final row in await db.getAllInspirations()) {
+        if (row.uuid != inspirationUuid) {
+          await db.deleteInspiration(row.id);
+        }
+      }
+
+      // 远端：同一 uuid 的附件，但内容不同。deviceId 取字典序最大值，
+      // 保证时间戳并列时确定性地选中远端行，触发本机冲突。
+      dav.seedSnapshot(
+        jsonEncode({
+          'version': 7,
+          'deviceId': 'zzz-device',
+          'exportedAt': '2026-05-16T00:00:00.000',
+          'inspirations': [
+            {
+              'uuid': inspirationUuid,
+              'content': '本地灵感',
+              'createdAt': 1000,
+              'updatedAt': 1000,
+              'isPinned': false,
+            },
+          ],
+          'projects': <Map<String, dynamic>>[],
+          'tasks': <Map<String, dynamic>>[],
+          'customSources': <Map<String, dynamic>>[],
+          'attachments': [
+            {
+              'uuid': attachmentUuid,
+              'ownerType': 'inspiration',
+              'ownerUuid': inspirationUuid,
+              'fileName': 'note.txt',
+              'filePath': '/other-device/note.txt',
+              'mimeType': 'text/plain',
+              'size': 12,
+              'createdAt': 1000,
+              'contentBase64': base64Encode(utf8.encode('远端内容')),
+            },
+          ],
+          'chatMessages': <Map<String, dynamic>>[],
+          'inspirationLinks': <Map<String, dynamic>>[],
+          'clusters': <Map<String, dynamic>>[],
+          'reports': <Map<String, dynamic>>[],
+          'deletedRecords': <Map<String, dynamic>>[],
+        }),
+        etag: '"v1"',
+      );
+
+      final result = await service.mergeSync();
+
+      expect(result.isSuccess, isTrue);
+      expect(result.message, contains('合并同步成功'));
+      expect(result.message, contains('1 个附件内容冲突'));
+
+      // 本机文件没有被静默覆盖；远端内容以 .conflict 副本保留。
+      expect(await File(localPath).readAsString(), '本机内容');
+      final conflict = File('$localPath.conflict');
+      expect(await conflict.exists(), isTrue);
+      expect(await conflict.readAsString(), '远端内容');
+
+      final row = (await db.getAllAttachments()).single;
+      expect(row.filePath, localPath);
+    });
+  });
+}
+
+class _FakePathProviderPlatform extends PathProviderPlatform {
+  _FakePathProviderPlatform(this.documentsPath);
+
+  final String documentsPath;
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async => documentsPath;
 }
 
 String _name(RequestOptions options) => options.uri.pathSegments.last;
