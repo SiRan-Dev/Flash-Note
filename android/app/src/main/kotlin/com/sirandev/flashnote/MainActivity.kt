@@ -14,6 +14,7 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val fairMemoryReceiver = FairMemoryReceiver()
+    private val shareIntentHandler by lazy { ShareIntentHandler(this) }
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +30,7 @@ class MainActivity : FlutterActivity() {
         }
         applyPredictiveBack()
         fairMemoryReceiver.initialize(this)
+        shareIntentHandler.handleIntent(intent)
     }
 
     /** Applies the predictive-back setting read from SharedPreferences. */
@@ -112,9 +114,18 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        shareIntentHandler.attach(flutterEngine)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        shareIntentHandler.handleIntent(intent)
     }
 
     override fun onDestroy() {
+        shareIntentHandler.detach()
         fairMemoryReceiver.dispose(this)
         super.onDestroy()
     }

@@ -7,6 +7,7 @@ import 'package:flashnote/presentation/providers/theme_provider.dart';
 import 'package:flashnote/presentation/providers/webdav_provider.dart';
 import 'package:flashnote/presentation/providers/memory_pressure_provider.dart';
 import 'package:flashnote/presentation/widgets/database_gate.dart';
+import 'package:flashnote/presentation/widgets/share_intake/share_intake_listener.dart';
 import 'package:flashnote/presentation/widgets/startup_update_checker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -118,8 +119,10 @@ class _FlashNoteAppState extends ConsumerState<FlashNoteApp> {
               routerConfig: router,
               builder:
                   (context, child) => DatabaseGate(
-                    child: StartupUpdateChecker(
-                      child: child ?? const SizedBox.shrink(),
+                    child: ShareIntakeListener(
+                      child: StartupUpdateChecker(
+                        child: child ?? const SizedBox.shrink(),
+                      ),
                     ),
                   ),
               debugShowCheckedModeBanner: false,
@@ -168,16 +171,16 @@ ColorScheme? _toFlutterColorScheme(mui.ColorScheme? scheme) {
     onPrimaryFixed: scheme.onPrimaryFixed,
     onPrimaryFixedVariant: scheme.onPrimaryFixedVariant,
     secondary: scheme.secondary,
-    onSecondary: scheme.onSecondary,
     secondaryContainer: scheme.secondaryContainer,
+    onSecondary: scheme.onSecondary,
     onSecondaryContainer: scheme.onSecondaryContainer,
     secondaryFixed: scheme.secondaryFixed,
     secondaryFixedDim: scheme.secondaryFixedDim,
     onSecondaryFixed: scheme.onSecondaryFixed,
     onSecondaryFixedVariant: scheme.onSecondaryFixedVariant,
     tertiary: scheme.tertiary,
-    onTertiary: scheme.onTertiary,
     tertiaryContainer: scheme.tertiaryContainer,
+    onTertiary: scheme.onTertiary,
     onTertiaryContainer: scheme.onTertiaryContainer,
     tertiaryFixed: scheme.tertiaryFixed,
     tertiaryFixedDim: scheme.tertiaryFixedDim,

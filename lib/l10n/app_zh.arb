@@ -283,5 +283,17 @@
   "clearGlobalChat": "清空对话",
   "clearGlobalChatConfirm": "确定清空全部对话历史吗？",
   "predictiveBack": "预测式返回手势",
-  "predictiveBackDesc": "从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上"
+  "predictiveBackDesc": "从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上",
+  "shareSaved": "已保存到灵感",
+  "sharePartialFailure": "已保存，但有 {count} 个附件读取失败",
+  "@sharePartialFailure": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "shareEmpty": "分享内容为空，未保存",
+  "shareFailed": "分享内容保存失败",
+  "sharedImageContent": "分享的图片"
 }

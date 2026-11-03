@@ -29,5 +29,8 @@ class AppConstants {
     'flag',
   ];
 
+  /// 分享内容里识别到 URL 时，沿用内置来源“阅读启发”做来源标记。
+  static const String sharedLinkSourceKey = 'reading';
+
   static const int recentInspirationLimit = 3;
 }
