@@ -1,13 +1,12 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flashnote/data/services/attachment_file_store.dart';
 import 'package:flashnote/domain/entities/attachment.dart';
 import 'package:flashnote/l10n/app_localizations.dart';
 import 'package:flashnote/presentation/providers/attachment_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 class AttachmentSection extends ConsumerWidget {
   const AttachmentSection({
@@ -109,30 +108,19 @@ class AttachmentSection extends ConsumerWidget {
       final sourcePath = file.path;
       if (sourcePath == null) return;
 
-      // Copy file to app directory
-      final appDir = await getApplicationDocumentsDirectory();
-      final attachmentsDir = Directory(p.join(appDir.path, 'attachments'));
-      await attachmentsDir.create(recursive: true);
-
-      final destPath = p.join(attachmentsDir.path,
-          '${DateTime.now().millisecondsSinceEpoch}_$fileName');
-      await File(sourcePath).copy(destPath);
-
-      // Determine mime type
-      final ext = p.extension(fileName).toLowerCase();
-      final mimeType = _mimeFromExtension(ext);
-
-      // Get file size
-      final fileSize = await File(destPath).length();
+      final stored = await AttachmentFileStore().importFile(
+        sourcePath: sourcePath,
+        fileName: fileName,
+      );
 
       final attachment = Attachment(
         id: 0,
         ownerType: ownerType,
         ownerId: ownerId,
-        fileName: fileName,
-        filePath: destPath,
-        mimeType: mimeType,
-        size: fileSize,
+        fileName: stored.fileName,
+        filePath: stored.path,
+        mimeType: stored.mimeType,
+        size: stored.size,
         createdAt: DateTime.now(),
       );
 
@@ -213,25 +201,6 @@ class AttachmentSection extends ConsumerWidget {
         ],
       ),
     );
-  }
-
-  static String _mimeFromExtension(String ext) {
-    return switch (ext) {
-      '.jpg' || '.jpeg' => 'image/jpeg',
-      '.png' => 'image/png',
-      '.gif' => 'image/gif',
-      '.webp' => 'image/webp',
-      '.svg' => 'image/svg+xml',
-      '.mp4' => 'video/mp4',
-      '.mov' => 'video/quicktime',
-      '.avi' => 'video/x-msvideo',
-      '.pdf' => 'application/pdf',
-      '.doc' || '.docx' => 'application/msword',
-      '.xls' || '.xlsx' => 'application/vnd.ms-excel',
-      '.txt' => 'text/plain',
-      '.json' => 'application/json',
-      _ => 'application/octet-stream',
-    };
   }
 }
 

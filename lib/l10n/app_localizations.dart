@@ -1801,6 +1801,36 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上'**
   String get predictiveBackDesc;
+
+  /// No description provided for @shareSaved.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存到灵感'**
+  String get shareSaved;
+
+  /// No description provided for @sharePartialFailure.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存，但有 {count} 个附件读取失败'**
+  String sharePartialFailure(int count);
+
+  /// No description provided for @shareEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'分享内容为空，未保存'**
+  String get shareEmpty;
+
+  /// No description provided for @shareFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'分享内容保存失败'**
+  String get shareFailed;
+
+  /// No description provided for @sharedImageContent.
+  ///
+  /// In zh, this message translates to:
+  /// **'分享的图片'**
+  String get sharedImageContent;
 }
 
 class _AppLocalizationsDelegate

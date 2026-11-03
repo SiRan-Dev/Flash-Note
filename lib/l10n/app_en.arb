@@ -283,5 +283,17 @@
   "clearGlobalChat": "Clear conversation",
   "clearGlobalChatConfirm": "Clear the entire conversation history?",
   "predictiveBack": "Predictive back gesture",
-  "predictiveBackDesc": "Preview the destination while swiping from the left edge. Requires Android 13 or later."
+  "predictiveBackDesc": "Preview the destination while swiping from the left edge. Requires Android 13 or later.",
+  "shareSaved": "Saved to inspirations",
+  "sharePartialFailure": "Saved, but {count} attachment(s) could not be read",
+  "@sharePartialFailure": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "shareEmpty": "Nothing was shared, so nothing was saved",
+  "shareFailed": "Could not save the shared content",
+  "sharedImageContent": "Shared image"
 }

@@ -861,4 +861,21 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get predictiveBackDesc => '从屏幕左侧边缘滑动时预览返回目标，需要 Android 13 及以上';
+
+  @override
+  String get shareSaved => '已保存到灵感';
+
+  @override
+  String sharePartialFailure(int count) {
+    return '已保存，但有 $count 个附件读取失败';
+  }
+
+  @override
+  String get shareEmpty => '分享内容为空，未保存';
+
+  @override
+  String get shareFailed => '分享内容保存失败';
+
+  @override
+  String get sharedImageContent => '分享的图片';
 }

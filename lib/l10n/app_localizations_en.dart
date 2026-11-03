@@ -882,4 +882,21 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get predictiveBackDesc =>
       'Preview the destination while swiping from the left edge. Requires Android 13 or later.';
+
+  @override
+  String get shareSaved => 'Saved to inspirations';
+
+  @override
+  String sharePartialFailure(int count) {
+    return 'Saved, but $count attachment(s) could not be read';
+  }
+
+  @override
+  String get shareEmpty => 'Nothing was shared, so nothing was saved';
+
+  @override
+  String get shareFailed => 'Could not save the shared content';
+
+  @override
+  String get sharedImageContent => 'Shared image';
 }
