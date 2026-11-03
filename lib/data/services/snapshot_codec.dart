@@ -12,6 +12,17 @@ import 'package:path_provider/path_provider.dart';
 const String kSnapshotFileName = 'flashnote_sync_v7.json';
 const String kLegacySnapshotFileName = 'flashnote_sync.json';
 
+/// 快照导入的结果统计。
+class SnapshotImportSummary {
+  const SnapshotImportSummary({this.attachmentConflicts = 0});
+
+  /// 同一 uuid 的附件在本地与快照中内容不同、且无法判断谁更新的数量。
+  ///
+  /// 冲突时本机文件被原样保留，快照里的内容另存为 `.conflict` 副本，
+  /// 没有任何文件被静默覆盖。
+  final int attachmentConflicts;
+}
+
 /// v7 快照的生成、旧版升级、合并与入库。
 ///
 /// 快照不再携带本地自增 id，只带 `uuid`；关系字段全部用 uuid 表达。
@@ -575,8 +586,19 @@ class SnapshotCodec {
   ///
   /// - 不用快照里的 id；按 uuid 匹配本地行，能复用本地 id 就复用；
   /// - 关系字段通过本次导入建立的 uuid→本地 id 映射还原；
-  /// - 快照中没有的本地行会被删除（覆盖语义）；附件只删行，不删磁盘文件。
-  Future<void> importSnapshot(Map<String, dynamic> data) async {
+  /// - 快照中没有的本地行会被删除（覆盖语义）；附件只删行，不删磁盘文件；
+  /// - 附件行存在但本机缺物理文件、且快照带内容时，按 uuid 落盘恢复。
+  ///
+  /// [preserveConflictingAttachments] 为 true 时（合并同步），同一 uuid 的
+  /// 附件内容与快照不一致且无法判断谁更新：保留本机文件、把快照内容另存为
+  /// `.conflict` 副本并计入 [SnapshotImportSummary.attachmentConflicts]，
+  /// 绝不静默挑选一侧。为 false 时（拉取 / 文件导入这类明确的覆盖语义），
+  /// 用快照内容覆盖本机文件。
+  Future<SnapshotImportSummary> importSnapshot(
+    Map<String, dynamic> data, {
+    bool preserveConflictingAttachments = false,
+  }) async {
+    var attachmentConflicts = 0;
     final inspirations = _listOf(data['inspirations']);
     final projects = _listOf(data['projects']);
     final tasks = _listOf(data['tasks']);
@@ -711,9 +733,39 @@ class SnapshotCodec {
 
       final existing = existingAttachments[uuid];
       final contentBase64 = item['contentBase64'] as String?;
-      final filePath = contentBase64 != null && contentBase64.isNotEmpty
-          ? await _restoreAttachmentFile(item, uuid: uuid)
-          : (existing?.filePath ?? (item['filePath'] as String? ?? ''));
+      String filePath;
+      if (contentBase64 != null && contentBase64.isNotEmpty) {
+        final remoteBytes = base64Decode(contentBase64);
+        final localPath = existing?.filePath ?? '';
+        final localFile = localPath.isEmpty ? null : File(localPath);
+        final localExists = localFile != null && await localFile.exists();
+
+        if (!localExists) {
+          // 本机缺物理文件（新行，或“有行没文件”）：按 uuid 落盘恢复。
+          filePath = await _restoreAttachmentFile(
+            item,
+            uuid: uuid,
+            bytes: remoteBytes,
+          );
+        } else if (_sameBytes(await localFile.readAsBytes(), remoteBytes)) {
+          // 内容一致：直接复用本机文件，避免每次同步重复写盘。
+          filePath = localPath;
+        } else if (preserveConflictingAttachments) {
+          // 两端内容不同且附件没有可靠的更新时间，无法判断谁更新：
+          // 保留本机文件，把快照内容另存副本，交给用户在结果里看到冲突。
+          await _writeConflictCopy(item, uuid: uuid, bytes: remoteBytes);
+          attachmentConflicts++;
+          filePath = localPath;
+        } else {
+          filePath = await _restoreAttachmentFile(
+            item,
+            uuid: uuid,
+            bytes: remoteBytes,
+          );
+        }
+      } else {
+        filePath = existing?.filePath ?? (item['filePath'] as String? ?? '');
+      }
 
       final companion = AttachmentsCompanion(
         ownerType: Value(ownerType),
@@ -854,6 +906,8 @@ class SnapshotCodec {
       clusters: clusters,
       reports: reports,
     );
+
+    return SnapshotImportSummary(attachmentConflicts: attachmentConflicts);
   }
 
   Future<void> _deleteRowsMissingFromSnapshot({
@@ -935,24 +989,48 @@ class SnapshotCodec {
     }
   }
 
+  /// 按 uuid 命名落盘，避免按本地自增 id 命名在同步后产生重复文件。
   Future<String> _restoreAttachmentFile(
     Map<String, dynamic> attachment, {
     required String uuid,
+    required List<int> bytes,
   }) async {
-    final contentBase64 = attachment['contentBase64'] as String;
+    final restoredPath = await _attachmentPathFor(attachment, uuid: uuid);
+    await File(restoredPath).writeAsBytes(bytes);
+    return restoredPath;
+  }
+
+  /// 冲突副本与正件同名（同 uuid），只加 `.conflict` 后缀，重复同步时幂等。
+  Future<void> _writeConflictCopy(
+    Map<String, dynamic> attachment, {
+    required String uuid,
+    required List<int> bytes,
+  }) async {
+    final conflictPath =
+        '${await _attachmentPathFor(attachment, uuid: uuid)}.conflict';
+    await File(conflictPath).writeAsBytes(bytes);
+  }
+
+  Future<String> _attachmentPathFor(
+    Map<String, dynamic> attachment, {
+    required String uuid,
+  }) async {
     final appDir = await getApplicationDocumentsDirectory();
     final attachmentsDir = Directory(p.join(appDir.path, 'attachments'));
     await attachmentsDir.create(recursive: true);
     final fileName = attachment['fileName'] as String? ?? 'attachment';
     final createdAt = attachment['createdAt'] as int? ?? 0;
     final safeName = p.basename(fileName);
-    final restoredPath = p.join(
-      attachmentsDir.path,
-      '${createdAt}_${uuid}_$safeName',
-    );
-    await File(restoredPath).writeAsBytes(base64Decode(contentBase64));
-    return restoredPath;
+    return p.join(attachmentsDir.path, '${createdAt}_${uuid}_$safeName');
   }
+}
+
+bool _sameBytes(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 List<dynamic> _parseTags(String tagsJson) {

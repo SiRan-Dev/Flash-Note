@@ -199,6 +199,22 @@ class WebDavClient {
     return name == null ? null : _urlFor(name);
   }
 
+  String? get _legacyFileBase {
+    final name = legacySnapshotFileName;
+    if (name == null) return null;
+    return name.endsWith('.json') ? name.substring(0, name.length - 5) : name;
+  }
+
+  String? get _legacyPointerUrl {
+    final base = _legacyFileBase;
+    return base == null ? null : _urlFor('$base.pointer.json');
+  }
+
+  String? _legacySlotUrl(String slot) {
+    final base = _legacyFileBase;
+    return base == null ? null : _urlFor('$base.$slot.json');
+  }
+
   String get _pointerUrl => _urlFor('$_fileBase.pointer.json');
 
   String _slotUrl(String slot) => _urlFor('$_fileBase.$slot.json');
@@ -336,8 +352,11 @@ class WebDavClient {
 
   /// 读取远端快照。
   ///
-  /// 顺序：v7 指针 → v7 正式文件 → 旧文件（只读，用于升级）。
-  /// 旧客户端永远不会写 v7 文件，因此升级后旧文件可以安全地保持不动。
+  /// 顺序：v7 指针 → v7 正式文件 → 旧指针（双槽位）→ 旧单文件 → 旧孤儿槽位。
+  /// 旧数据全部只读，用于升级；v7 文件一旦写入，后续读取不会再碰旧文件。
+  ///
+  /// 旧指针先于旧单文件：旧客户端进入双槽位模式后只会更新槽位，正式单文件
+  /// 停留在进入降级前的旧内容，槽位才是最新数据。
   Future<WebDavDownload?> downloadData() async {
     final pointer = await _readPointer(allowNotFound: true);
     if (pointer != null) {
@@ -381,20 +400,95 @@ class WebDavClient {
     return await _downloadLegacy();
   }
 
+  /// 旧格式回退：旧指针（双槽位）→ 旧单文件 → 无指针的孤儿槽位。
+  ///
+  /// 返回值语义与 [_downloadLegacy] 相同：v7 目标文件尚不存在，调用方会把
+  /// 升级结果按首次创建（If-None-Match: *）发布到 v7 文件。
   Future<WebDavDownload?> _downloadLegacy() async {
-    final legacyUrl = _legacyUrl;
-    if (legacyUrl == null) return null;
+    final pointerUrl = _legacyPointerUrl;
+    if (pointerUrl != null) {
+      final pointer = await _readPointerAt(
+        pointerUrl,
+        allowNotFound: true,
+        label: '远端旧同步指针',
+      );
+      if (pointer != null) {
+        return await _downloadLegacySlot(pointer);
+      }
+    }
 
-    final downloaded = await _downloadBytes(
-      legacyUrl,
-      allowNotFound: true,
-      label: '远端旧同步文件',
+    final legacyUrl = _legacyUrl;
+    if (legacyUrl != null) {
+      final downloaded = await _downloadBytes(
+        legacyUrl,
+        allowNotFound: true,
+        label: '远端旧同步文件',
+      );
+      if (downloaded != null) {
+        return WebDavDownload(
+          data: _requireSnapshot(downloaded.bytes, label: '远端旧同步文件'),
+          publishState: const WebDavPublishState.firstSync(),
+          fromLegacyFile: true,
+        );
+      }
+    }
+
+    return await _downloadOrphanLegacySlots();
+  }
+
+  /// 按旧指针读取激活槽位。长度不一致或解析失败都明确报错：指针声明的
+  /// 就是最新数据，静默跳过等于弄丢用户的同步结果。
+  Future<WebDavDownload> _downloadLegacySlot(_PointerDoc pointer) async {
+    final slotUrl = _legacySlotUrl(pointer.slot);
+    if (slotUrl == null) {
+      throw const WebDavException('远端旧同步文件名配置不正确');
+    }
+    final slotDownload = await _downloadBytes(
+      slotUrl,
+      followRedirects: false,
+      label: '远端旧同步槽位',
     );
-    if (downloaded == null) return null;
+    if (slotDownload == null) {
+      throw const WebDavException('远端旧同步指针指向的槽位不存在，已中止');
+    }
+    if (slotDownload.bytes.length != pointer.size) {
+      throw const WebDavException('远端旧同步指针指向的槽位长度不一致，已中止');
+    }
+    return WebDavDownload(
+      data: _requireSnapshot(slotDownload.bytes, label: '远端旧同步槽位'),
+      publishState: const WebDavPublishState.firstSync(),
+      fromLegacyFile: true,
+    );
+  }
+
+  /// 指针缺失时的兜底：两个旧槽位都下载，取时间（exportedAt）更新者，
+  /// 并列时取版本号更大者；两个都解析失败则明确报错。
+  Future<WebDavDownload?> _downloadOrphanLegacySlots() async {
+    final candidates = <String, _DownloadedBytes>{};
+    for (final slot in _slotNames) {
+      final slotUrl = _legacySlotUrl(slot);
+      if (slotUrl == null) return null;
+      final downloaded = await _downloadBytes(
+        slotUrl,
+        allowNotFound: true,
+        followRedirects: false,
+        label: '远端旧同步槽位',
+      );
+      if (downloaded != null) candidates[slot] = downloaded;
+    }
+    if (candidates.isEmpty) return null;
+
+    Map<String, dynamic>? best;
+    for (final entry in candidates.entries) {
+      // _requireSnapshot 解析失败会直接抛错：宁可中止也不静默丢数据。
+      final parsed = _requireSnapshot(entry.value.bytes, label: '远端旧同步槽位');
+      if (best == null || _snapshotNewer(parsed, best)) {
+        best = parsed;
+      }
+    }
 
     return WebDavDownload(
-      data: _requireSnapshot(downloaded.bytes, label: '远端旧同步文件'),
-      // v7 目标文件还不存在：按首次创建处理，若其他设备抢先创建会 412 中止。
+      data: best!,
       publishState: const WebDavPublishState.firstSync(),
       fromLegacyFile: true,
     );
@@ -538,26 +632,58 @@ class WebDavClient {
     return true;
   }
 
-  Future<_PointerDoc?> _readPointer({required bool allowNotFound}) async {
+  Future<_PointerDoc?> _readPointer({required bool allowNotFound}) =>
+      _readPointerAt(
+        _pointerUrl,
+        allowNotFound: allowNotFound,
+        label: '远端同步指针',
+      );
+
+  Future<_PointerDoc?> _readPointerAt(
+    String url, {
+    required bool allowNotFound,
+    required String label,
+  }) async {
     final downloaded = await _downloadBytes(
-      _pointerUrl,
+      url,
       allowNotFound: allowNotFound,
       followRedirects: false,
       maxBytes: _maxPointerBytes,
-      label: '远端同步指针',
+      label: label,
     );
     if (downloaded == null) return null;
 
-    final pointer = _requireMap(downloaded.bytes, label: '远端同步指针');
+    final pointer = _requireMap(downloaded.bytes, label: label);
     final slot = pointer['slot'];
     final size = pointer['size'];
     if (slot is! String || !_slotNames.contains(slot)) {
-      throw const WebDavException('远端同步指针中的槽位无效');
+      throw WebDavException('$label中的槽位无效');
     }
     if (size is! int || size <= 0) {
-      throw const WebDavException('远端同步指针中的长度无效');
+      throw WebDavException('$label中的长度无效');
     }
     return _PointerDoc(slot: slot, size: size, version: downloaded.version);
+  }
+
+  /// 快照新旧比较：先比 exportedAt，再比 version，用于孤儿旧槽位的兜底选择。
+  static bool _snapshotNewer(
+    Map<String, dynamic> candidate,
+    Map<String, dynamic> current,
+  ) {
+    final candidateTime = _exportedAtMillis(candidate['exportedAt']);
+    final currentTime = _exportedAtMillis(current['exportedAt']);
+    if (candidateTime != currentTime) return candidateTime > currentTime;
+    final candidateVersion = candidate['version'];
+    final currentVersion = current['version'];
+    if (candidateVersion is int && currentVersion is int) {
+      return candidateVersion >= currentVersion;
+    }
+    return true;
+  }
+
+  static int _exportedAtMillis(Object? value) {
+    if (value is! String) return 0;
+    return DateTime.tryParse(value)?.millisecondsSinceEpoch ?? 0;
   }
 
   Future<_DownloadedBytes?> _downloadBytes(
