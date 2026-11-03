@@ -83,3 +83,7 @@ jobs:
 
       - name: Build debug APK
         run: flutter build apk --debug
+
+      # Log the artifact size only; the APK itself is never uploaded from CI.
+      - name: Report APK size
+        run: ls -lh build/app/outputs/flutter-apk/app-debug.apk
