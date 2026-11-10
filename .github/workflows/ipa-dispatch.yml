@@ -1,0 +1,55 @@
+name: Build iOS IPA (unsigned)
+
+# 手动触发，在 GitHub 的 macOS runner 上打出未签名 IPA 并作为 artifact 上传。
+# Windows 上没有 Xcode，flutter build ipa 只能在 macOS 上跑，所以 iOS 包走这里。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Generated sources (*.g.dart / *.freezed.dart) 不提交，构建前先生成。
+      - name: Generate code
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # 未签名构建：产物结构完整，但装到真机前需要自己用 Apple ID 签一次名。
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_DIR="build/ios/iphoneos"
+          rm -rf "$APP_DIR/Payload"
+          mkdir -p "$APP_DIR/Payload"
+          cp -R "$APP_DIR/Runner.app" "$APP_DIR/Payload/"
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_DIR/Runner.app/Info.plist")
+          cd "$APP_DIR"
+          zip -qry "$GITHUB_WORKSPACE/FlashNote-${VERSION}-unsigned.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/FlashNote-${VERSION}-unsigned.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlashNote-ipa
+          path: FlashNote-*-unsigned.ipa
+          retention-days: 7
